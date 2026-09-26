@@ -1,0 +1,350 @@
+================================================================================
+ TASK 01 & TASK 02 — SUMMARY
+ DarCom Co-Hosting Platform (darcom-backend)
+ Stack: Java 21 · Jakarta EE 10 (Persistence 3.1, Validation 3.0) · Hibernate 6.4.4 · PostgreSQL
+================================================================================
+
+--------------------------------------------------------------------------------
+ TASK 01 — Domain Entities (JPA)
+--------------------------------------------------------------------------------
+ Goal: Create the JPA domain model from API-Specification.md §3/§12/§13 as
+       Hibernate-managed entities that generate the DDL via drop-and-create.
+
+ Deliverable: 12 files — 7 entities + 5 enums. No repositories/services.
+
+ Files created (src/main/java/com/backend/domain):
+  1. domain/User.java                    @Table(users)
+  2. domain/Listing.java                 @Table(listings)
+  3. domain/Photo.java                   @Table(photos)
+  4. domain/Booking.java                 @Table(bookings)
+  5. domain/Message.java                 @Table(messages)
+  6. domain/Report.java                  @Table(reports)
+  7. domain/RefreshToken.java            @Table(refresh_tokens)
+  8. domain/enums/UserRole.java          HOST, VISITOR, ADMIN
+  9. domain/enums/ListingStatus.java     ACTIVE, HIDDEN, REMOVED
+ 10. domain/enums/BookingStatus.java     PENDING, CONFIRMED, REJECTED, CANCELLED + state machine
+ 11. domain/enums/ReportReason.java      SCAM, MISLEADING_LISTING, INAPPROPRIATE_BEHAVIOR, OTHER
+ 12. domain/enums/ReportStatus.java      OPEN, REVIEWED, DISMISSED, ACTIONED
+
+ Global conventions (all 7 entities):
+  - No inheritance/@MappedSuperclass (audit columns differ per table)
+  - @Id @GeneratedValue(GENERATION.UUID) java.util.UUID, explicit @Column(name) snake_case
+  - All @ManyToOne FetchType.LAZY, optional=false where FK NOT NULL
+  - Only bidirectional: Listing.photos <-> Photo.listing (cascade ALL + orphanRemoval + @OrderBy sortOrder)
+  - No Lombok, hand-written getters/setters, public no-arg ctor required by JPA
+  - equals/hashCode: final, id-based (id!=null && id.equals(other.getId())), hash = Class.hashCode() (proxy-safe)
+  - toString: scalar fields only (never association/collection, never passwordHash/tokenHash)
+  - Timestamps: Instant (TIMESTAMPTZ) via @PrePersist/@PreUpdate, LocalDate for checkIn/checkOut
+  - Enums: @Enumerated(STRING), never ORDINAL; Jakarta imports only
+
+ Entity details:
+  User: email(@Email @NotBlank unique 255), passwordHash(255), fullName(255), phone(30), role(UserRole 20),
+        verified/blocked boolean, createdAt (TIMESTAMPTZ). No collections on User by design.
+  Listing: host(User FK host_id), title(255), description(TEXT), city(120), address(255),
+           pricePerNight(BigDecimal 10,2 @PositiveOrZero), currency(3 default MAD), mealsIncluded bool,
+           activities @ElementCollection Set<String> -> listing_activities(listing_id, activity 120) LinkedHashSet,
+           status(ListingStatus ACTIVE), photos List<Photo>, createdAt, updatedAt. Helpers addPhoto/removePhoto + clear-and-addAll setters.
+  Photo: listing(FK listing_id), url(500 @NotBlank), sortOrder int 0. No timestamps.
+  Booking: listing(FK), visitor(FK visitor_id), checkIn/checkOut LocalDate @NotNull, guestsCount int @Positive,
+           status(BookingStatus PENDING), createdAt, updatedAt. No totalPrice/message fields. TODO checkOut>checkIn in service.
+  Message: listing(FK), sender(FK sender_id), receiver(FK receiver_id), body(TEXT @NotBlank), sentAt(PrePersist), readAt.
+           Threads derived via (listing_id, sender_id, receiver_id).
+  Report: reporter(FK), reportedHost(FK reported_host_id), listing(FK nullable), reason(ReportReason 30),
+          details(TEXT), status(ReportStatus OPEN), adminNotes(TEXT), createdAt, reviewedAt(admin action).
+  RefreshToken: user(FK user_id), tokenHash(512 unique @NotBlank, stores hash never raw), expiresAt, createdAt,
+                isExpired() = expiresAt < now, toString excludes hash.
+
+ Companion changes:
+  pom.xml: added jakarta.validation-api 3.0.2 (runtime, because jakarta.jakartaee-api is provided; same fix as persistence-api)
+  persistence.xml (META-INF): added 7 explicit <class> entries for reliable discovery under RESOURCE_LOCAL/WAR (invest-pu retained)
+  Drop-and-create retained: Hibernate rebuilds schema from annotations on each EMF start; data does not survive restart.
+
+ Verification: mvn clean compile BUILD SUCCESS (13 src files with TestServlet), no FetchType.EAGER, no javax., no ORDINAL.
+
+--------------------------------------------------------------------------------
+ TASK 02 — Persistence Bootstrap & Repository Layer
+--------------------------------------------------------------------------------
+ Goal: Centralize JPA bootstrap and provide a typed repository layer on top of
+       Task 01 entities. Repositories return entities only; no services/DTOs/JAX-RS.
+       No transaction management (Service layer concern per spec §1).
+
+ Deliverable: 10 files — 1 bootstrap + 1 pagination type + 1 generic base + 7 specific repos.
+
+ Files created:
+  1. persistence/JpaUtil.java
+  2. repository/Pageable.java
+  3. repository/GenericRepository.java
+  4. repository/UserRepository.java
+  5. repository/ListingRepository.java
+  6. repository/PhotoRepository.java
+  7. repository/BookingRepository.java
+  8. repository/MessageRepository.java
+  9. repository/ReportRepository.java
+ 10. repository/RefreshTokenRepository.java
+
+ No changes to domain/**, pom.xml, persistence.xml in this task.
+
+ --------------------------------------------------------------------------------
+  CLASS / FUNCTION DEFINITIONS — TASK 02
+ --------------------------------------------------------------------------------
+
+ 1) persistence.JpaUtil  [src/main/java/com/backend/persistence/JpaUtil.java]
+    Purpose: Single owner of EntityManagerFactory for whole app. Replaces inline
+             Persistence.createEntityManagerFactory(...) from smoke checks.
+             Uses Dotenv to inject DB_URL/DB_USER/DB_PASSWORD + driver.
+
+    - private static final String PERSISTENCE_UNIT_NAME = "invest-pu"
+      Constant matching persistence.xml persistence-unit name. Update in one place if renamed.
+
+    - private static final EntityManagerFactory EMF = buildEntityManagerFactory()
+      Eagerly built singleton, reused for all EntityManagers.
+
+    - private JpaUtil() {}
+      Prevent instantiation (utility class, final).
+
+    - private static EntityManagerFactory buildEntityManagerFactory() : EntityManagerFactory
+      Loads Dotenv.load(), builds Map<String,String> props:
+        jakarta.persistence.jdbc.url      -> dotenv.get("DB_URL")
+        jakarta.persistence.jdbc.user     -> dotenv.get("DB_USER")
+        jakarta.persistence.jdbc.password -> dotenv.get("DB_PASSWORD")
+        jakarta.persistence.jdbc.driver   -> "org.postgresql.Driver"
+      Returns: Persistence.createEntityManagerFactory(PERSISTENCE_UNIT_NAME, props)
+
+    - public static EntityManager createEntityManager() : EntityManager
+      Delegates to EMF.createEntityManager(). Caller (currently manual, later Service) opens/closes transaction.
+
+    - public static void shutdown() : void
+      Closes EMF if open. Not yet wired; intended for ServletContextListener.contextDestroyed().
+
+ 2) repository.Pageable  [src/main/java/com/backend/repository/Pageable.java]
+    Purpose: Typed pagination envelope. Every paginated repo method takes one
+             Pageable instead of two raw ints. Validation here, size clamping (max 100) in Service/Resource.
+
+    - public record Pageable(int page, int size)
+      Compact record. Canonical constructor validates:
+        if page < 0 throw IllegalArgumentException("page must be >= 0")
+        if size < 1 throw IllegalArgumentException("size must be >= 1")
+
+    - public int offset() : int
+      Returns page * size (firstResult for JPA). Used by all paginated queries.
+
+ 3) repository.GenericRepository<T>  [src/main/java/com/backend/repository/GenericRepository.java]
+    Purpose: Shared CRUD for all entities. UUID is hard-coded as ID type because
+             Task 01 mandates UUID for every entity; no generic <ID> needed.
+
+    Fields:
+      protected final EntityManager em
+      protected final Class<T> entityClass
+
+    - public GenericRepository(EntityManager em, Class<T> entityClass)
+      Constructor — borrows EM (never creates/closes), stores target class.
+
+    - public Optional<T> findById(UUID id) : Optional<T>
+      em.find(entityClass, id) wrapped in Optional.ofNullable. Proxy-safe.
+
+    - public List<T> findAll(Pageable pageable) : List<T>
+      Criteria API: cb.createQuery(entityClass), cq.select(cq.from(entityClass)), setFirstResult(offset)/maxResults(size).
+
+    - public T create(T entity) : T
+      em.persist(entity); return entity. Requires active transaction outside repo.
+
+    - public T update(T entity) : T
+      return em.merge(entity). Works for detached instances.
+
+    - public void delete(T entity) : void
+      em.remove(em.contains(entity) ? entity : em.merge(entity)) — merges first if detached to avoid IllegalArgumentException.
+
+    - public void deleteById(UUID id) : void
+      findById(id).ifPresent(this::delete) — no exception if missing.
+
+    - public long count() : long
+      Criteria: select(cb.count(cq.from(entityClass))), getSingleResult().
+
+ 4) repository.UserRepository extends GenericRepository<User>
+    Serves: POST /auth/register (duplicate), POST /auth/login, POST /auth/resend-verification, GET /admin/users
+    Constructor: public UserRepository(EntityManager em) -> super(em, User.class)
+
+    - public Optional<User> findByEmail(String email) : Optional<User>
+      JPQL: "SELECT u FROM User u WHERE u.email = :email" -> getResultStream().findFirst() (no NoResultException, returns empty Optional).
+      Used for login lookup.
+
+    - public boolean existsByEmail(String email) : boolean
+      JPQL COUNT: "SELECT COUNT(u) FROM User u WHERE u.email = :email" -> count>0. Lightweight 409 check for register without hydrating User.
+
+    - public List<User> search(UserRole role, Boolean verified, Boolean blocked, String searchText, Pageable pageable) : List<User>
+      Criteria API with 4 optional filters. Builds Predicate[] via searchPredicates(...), where(cb), orderBy(createdAt DESC), paginated.
+      Endpoint: GET /admin/users?role=&verified=&blocked=&search= (search matches fullName OR email, case-insensitive LIKE %text%).
+
+    - public long countSearch(UserRole role, Boolean verified, Boolean blocked, String searchText) : long
+      Same predicates as search() but select(cb.count(root)). For paginated envelope totalItems.
+
+    - private Predicate[] searchPredicates(CriteriaBuilder cb, Root<User> root, UserRole role, Boolean verified, Boolean blocked, String searchText) : Predicate[]
+      Adds: role==, verified==, blocked== if non-null; if searchText non-blank -> OR( lower(fullName) LIKE %lower%, lower(email) LIKE % ). Returns toArray.
+
+ 5) repository.ListingRepository extends GenericRepository<Listing>
+    Serves: GET /listings (public search), GET /listings/mine, block/unblock side effect (§10)
+    Constructor: public ListingRepository(EntityManager em)
+
+    - public List<Listing> findByHost(User host, Pageable pageable) : List<Listing>
+      JPQL: "SELECT l FROM Listing l WHERE l.host = :host ORDER BY l.createdAt DESC" paginated. For GET /listings/mine (host sees all statuses).
+
+    - public List<Listing> findByHostAndStatus(User host, ListingStatus status) : List<Listing>
+      JPQL: "SELECT l FROM Listing l WHERE l.host = :host AND l.status = :status" (no pagination). For §10 blocking: hide all ACTIVE listings of blocked host.
+
+    - public List<Listing> search(String city, BigDecimal minPrice, BigDecimal maxPrice, Boolean mealsIncluded, Pageable pageable) : List<Listing>
+      Criteria API. Always adds status==ACTIVE. Optionally adds: city case-insensitive equality, pricePerNight >= minPrice, <= maxPrice, mealsIncluded==. orderBy(createdAt DESC) paginated.
+      Endpoint: GET /listings?city=&minPrice=&maxPrice=&mealsIncluded=
+
+    - public long countSearch(String city, BigDecimal minPrice, BigDecimal maxPrice, Boolean mealsIncluded) : long
+      Same predicates, select COUNT, for pagination total.
+
+    - private Predicate[] searchPredicates(CriteriaBuilder cb, Root<Listing> root, String city, BigDecimal minPrice, BigDecimal maxPrice, Boolean mealsIncluded) : Predicate[]
+      Always ACTIVE; conditionally adds 4 filters as above.
+
+ 6) repository.PhotoRepository extends GenericRepository<Photo>
+    Serves: POST /listings/{id}/photos, DELETE /listings/{id}/photos/{photoId}
+    Constructor: public PhotoRepository(EntityManager em)
+    No extra methods. Generic findById/create/delete suffice. Listing.photos already gives all photos for a listing; no independent photo search needed per spec.
+
+ 7) repository.BookingRepository extends GenericRepository<Booking>
+    Serves: GET /bookings/mine, GET /bookings/received, overlap check for PATCH /bookings/{id}/status, delete guard DELETE /listings/{id}
+    Constructor: public BookingRepository(EntityManager em)
+
+    - public List<Booking> findByVisitor(User visitor, Pageable pageable) : List<Booking>
+      JPQL: "SELECT b FROM Booking b WHERE b.visitor = :visitor ORDER BY b.createdAt DESC" paginated. For GET /bookings/mine.
+
+    - public List<Booking> findByListingHost(User host, BookingStatus status, Pageable pageable) : List<Booking>
+      JPQL with optional status: "SELECT b FROM Booking b WHERE b.listing.host = :host" + (status!=null ? " AND b.status = :status" : "") + " ORDER BY b.createdAt DESC"
+      Uses TypedQuery, conditionally setParameter("status"). For GET /bookings/received?status= (across all host listings).
+
+    - public List<Booking> findOverlapping(Listing listing, LocalDate checkIn, LocalDate checkOut, List<BookingStatus> statuses, UUID excludeBookingId) : List<Booking>
+      JPQL: "SELECT b FROM Booking b WHERE b.listing = :listing AND b.status IN :statuses AND b.id <> :excludeId AND b.checkIn < :checkOut AND b.checkOut > :checkIn"
+      Half-open interval overlap logic: [a1,a2) overlaps [b1,b2) iff a1<b2 && a2>b1. Same-day turnover (checkout==checkin) is NOT overlap. Backs PATCH /bookings/{id}/status auto-reject: on CONFIRMED, find other PENDING overlapping bookings to reject. Service decides when to call.
+
+    - public boolean existsActiveBookingForListing(Listing listing) : boolean
+      JPQL COUNT: "SELECT COUNT(b) FROM Booking b WHERE b.listing = :listing AND b.status IN :statuses" with PENDING,CONFIRMED -> count>0. Guard for DELETE /listings/{id} -> 409 CANNOT_DELETE_WITH_ACTIVE_BOOKINGS.
+
+ 8) repository.MessageRepository extends GenericRepository<Message>
+    Serves: GET /listings/{listingId}/messages
+    Constructor: public MessageRepository(EntityManager em)
+
+    - public List<Message> findThread(Listing listing, User userA, User userB, Pageable pageable) : List<Message>
+      JPQL: "SELECT m FROM Message m WHERE m.listing = :listing AND ((m.sender=:userA AND m.receiver=:userB) OR (m.sender=:userB AND m.receiver=:userA)) ORDER BY m.sentAt ASC" paginated.
+      Returns chronological thread between two participants on one listing, regardless of direction. Resolving who userA/userB are (caller vs withUser) is Resource/Service, not repo.
+
+ 9) repository.ReportRepository extends GenericRepository<Report>
+    Serves: GET /admin/reports, count on GET /admin/users/{id}
+    Constructor: public ReportRepository(EntityManager em)
+
+    - public List<Report> findByStatus(ReportStatus status, Pageable pageable) : List<Report>
+      JPQL with optional filter: "SELECT r FROM Report r" + (status!=null ? " WHERE r.status = :status" : "") + " ORDER BY r.createdAt DESC" paginated via TypedQuery.
+
+    - public long countByReportedHost(User host) : long
+      JPQL COUNT: "SELECT COUNT(r) FROM Report r WHERE r.reportedHost = :host" -> total reports against a host.
+
+ 10) repository.RefreshTokenRepository extends GenericRepository<RefreshToken>
+     Serves: POST /auth/refresh, POST /auth/logout
+     Constructor: public RefreshTokenRepository(EntityManager em)
+
+     - public Optional<RefreshToken> findByTokenHash(String tokenHash) : Optional<RefreshToken>
+       JPQL: "SELECT rt FROM RefreshToken rt WHERE rt.tokenHash = :hash" -> getResultStream().findFirst(). Lookup by hash, never raw token.
+
+     - public void deleteByTokenHash(String tokenHash) : void
+       findByTokenHash(hash).ifPresent(this::delete) — revokes single token for logout.
+
+     - public int deleteAllExpired() : int
+       Bulk JPQL DELETE: "DELETE FROM RefreshToken rt WHERE rt.expiresAt < CURRENT_TIMESTAMP" -> executeUpdate() returns deleted count. Bypasses persistence context; not yet scheduled, for future cleanup job.
+
+ --------------------------------------------------------------------------------
+ DESIGN PATTERNS USED IN TASK 02
+ --------------------------------------------------------------------------------
+  Yes — 4 deliberate patterns. No accidental pattern bloat.
+
+  1) Repository Pattern (primary pattern for the whole task)
+     Definition: Mediates between domain and persistence. Encapsulates
+     storage/retrieval/queries, exposes collection-like interface for
+     domain objects, hides JPQL/Criteria details. Returns entities only,
+     never DTOs (mapping is Task 03).
+     Applied: GenericRepository<T> [repository/GenericRepository.java:10]
+             as generic collection facade over EntityManager, plus 7
+             typed extensions (UserRepository, ListingRepository,
+             PhotoRepository, BookingRepository, MessageRepository,
+             ReportRepository, RefreshTokenRepository). Each adds only
+             the query methods its endpoints need (§6.1-6.7).
+             Callers never call em.persist/merge directly.
+     Why: Spec §1 layering (Repository → Service). Tests can mock/swap
+          repos; queries change in one place.
+
+  2) Singleton — Eager Static Initialization via Utility Class (JpaUtil)
+     Definition: Ensure exactly one instance of a resource, globally
+     accessible, thread-safe without synchronization.
+     Applied: persistence/JpaUtil.java:11-18
+             final class, private JpaUtil(){}, private static final EMF
+             = buildEntityManagerFactory(), static accessors
+             createEntityManager()/shutdown(). EMF built eagerly at
+             class-load; JVM guarantees thread-safety. Matches
+             persistence-unit "invest-pu" in one place.
+     Why: EntityManagerFactory is heavyweight (connection pool + metamodel);
+          per JPA spec it must be singleton per app.
+
+  3) Factory Method (Static Factory) + Value Object
+     Definition: Creator method manufactures product without exposing
+     construction details.
+     Applied: JpaUtil.createEntityManager() [JpaUtil.java:143] delegates
+             to EMF.createEntityManager(). Callers get a fresh
+             EntityManager without knowing Dotenv props or PU name.
+             Pageable [repository/Pageable.java:3] is a Value Object /
+             Parameter Object record (page, size, offset()) with
+             invariant validation — immutable factory for pagination.
+     Why: Centralizes creation; Service later can replace with CDI
+          @Produces without changing repositories.
+
+  4) Dependency Injection — Constructor Injection + Inversion of Control
+     Definition: Dependencies are supplied from outside, not created
+     inside. Repositories "borrow" their collaborator.
+     Applied: Every repository ctor takes EntityManager exclusively
+             (UserRepository(EntityManager em) [UserRepository.java:14],
+              ListingRepository etc.), GenericRepository(EntityManager, Class<T>).
+             No repo calls new JpaUtil(), Persistence.create..., or
+             getTransaction(). Per spec §3.1 borrow-not-own.
+     Why: Repo works whether or not a transaction is already open;
+          Service controls tx boundary; unit tests can inject a
+          test EntityManager (or mock).
+
+  5) Template Method via Inheritance (Generic → Specific)
+     Definition: Base class defines skeleton of operations; subclasses
+     fill in specializations.
+     Applied: GenericRepository defines findById/findAll/create/update/
+             delete/count [GenericRepository.java:199-235]; specific
+             repos inherit and only override/add searchPredicates or
+             JPQL queries. Avoids duplicating pagination and CRUD.
+     Why: DRY; 7 repos share identical CRUD without copy-paste.
+
+  Patterns deliberately NOT used:
+   - Active Record (entities would manage their own persistence) — avoided
+     per spec; entities stay anemic POJOs, repos handle persistence.
+   - Service Locator / CDI (@ApplicationScoped/@Inject) — deferred per §0/§7.
+   - Unit of Work exposed in repos — transactions stay in Service layer.
+
+ --------------------------------------------------------------------------------
+ DEFERRED (§7) — STILL NOT BUILT
+ --------------------------------------------------------------------------------
+  - GET /messages/conversations : grouped by (listing, counterpart) with last message + unread count — requires DTO projection, not List<Message>; deferred until Task 03 DTO shape known.
+  - Booking auto-reject workflow : findOverlapping is the query; looping/rejecting is Service orchestration.
+  - CDI wiring (@ApplicationScoped/@Inject/@Produces) : repositories stay plain new XRepository(em); wiring later.
+
+ --------------------------------------------------------------------------------
+ VERIFICATION
+ --------------------------------------------------------------------------------
+  - Exactly 12 Task01 files + 10 Task02 files (23 src with TestServlet)
+  - No changes to domain/** in Task02; no pom/persistence changes in Task02
+  - mvn clean compile -> BUILD SUCCESS
+  - grep getTransaction -> 0 hits, grep javax. -> 0 hits, grep ORDINAL -> 0 hits
+  - All paginated methods take Pageable; all repos ctor EntityManager only
+  - No DTO/JAX-RS/HTTP status in repository code (comments only)
+  Usage (manual smoke): EntityManager em = JpaUtil.createEntityManager(); em.getTransaction().begin(); new UserRepository(em).create(user); em.getTransaction().commit(); em.close();
+
+ Suggested commits:
+  feat(domain): add JPA entities and enums for co-hosting MVP
+  feat: add JPA persistence bootstrap and repository layer
+================================================================================
