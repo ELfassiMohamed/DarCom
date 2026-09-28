@@ -12,6 +12,8 @@ import jakarta.persistence.criteria.Root;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
 
 public class ListingRepository extends GenericRepository<Listing> {
 
@@ -38,6 +40,39 @@ public class ListingRepository extends GenericRepository<Listing> {
                 .setParameter("host", host)
                 .setParameter("status", status)
                 .getResultList();
+    }
+
+    /** Total count for GET /listings/mine's pagination envelope. */
+    public long countByHost(User host) {
+        return em.createQuery(
+                "SELECT COUNT(l) FROM Listing l WHERE l.host = :host", Long.class)
+                .setParameter("host", host)
+                .getSingleResult();
+    }
+
+    /**
+     * Eagerly loads host and photos so both are still safely readable after this
+     * transaction closes. host uses an inner JOIN FETCH (always present, never
+     * null); photos uses LEFT JOIN FETCH (a listing may have zero). DISTINCT
+     * matters here: fetch-joining a collection makes the raw result repeat the
+     * parent once per child row — without it, a listing with 3 photos would
+     * appear 3 times in the result.
+     *
+     * activities isn't fetch-joined here. photos is a List — a "bag" to
+     * Hibernate — and fetch-joining two collections in one query risks
+     * MultipleBagFetchException. Not worth the uncertainty for one extra field;
+     * ListingService (§7) initializes activities separately instead.
+     */
+    public Optional<Listing> findByIdWithDetails(UUID id) {
+        return em.createQuery(
+                "SELECT DISTINCT l FROM Listing l " +
+                "JOIN FETCH l.host " +
+                "LEFT JOIN FETCH l.photos " +
+                "WHERE l.id = :id",
+                Listing.class)
+                .setParameter("id", id)
+                .getResultStream()
+                .findFirst();
     }
 
     /**

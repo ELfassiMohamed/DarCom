@@ -344,7 +344,413 @@
   - No DTO/JAX-RS/HTTP status in repository code (comments only)
   Usage (manual smoke): EntityManager em = JpaUtil.createEntityManager(); em.getTransaction().begin(); new UserRepository(em).create(user); em.getTransaction().commit(); em.close();
 
- Suggested commits:
-  feat(domain): add JPA entities and enums for co-hosting MVP
-  feat: add JPA persistence bootstrap and repository layer
+  Suggested commits:
+   feat(domain): add JPA entities and enums for co-hosting MVP
+   feat: add JPA persistence bootstrap and repository layer
+================================================================================
+
+
+================================================================================
+ TASK 03 — Transactions, Exceptions & Listing Service
+ DarCom Co-Hosting Platform (darcom-backend)
+ Stack: Java 21 · Jakarta EE 10 (Persistence 3.1, Validation 3.0) · Hibernate 6.4.4 · PostgreSQL
+================================================================================
+
+ Goal: Give the Service layer a real transaction boundary and a way to signal
+       spec-defined failures without a Resource layer to catch them yet.
+       ListingService covers all six §6 Listings endpoints.
+
+ Deliverable: 7 new files + 2 additive methods in 1 existing file. No tests
+              (explicitly out of scope per §0).
+
+ Files created (src/main/java/com/backend):
+   1. exception/ApiException.java        abstract base — status + errorCode + message
+   2. exception/NotFoundException.java   404
+   3. exception/ForbiddenException.java  403
+   4. exception/ConflictException.java   409
+   5. service/TransactionRunner.java     EM + transaction lifecycle: call / execute
+   6. service/PagedResult.java           record PagedResult<T>(List<T> items, long totalItems)
+   7. service/ListingService.java        create / getById / search / findMine / update / delete
+
+ File edited:
+   repository/ListingRepository.java    + findByIdWithDetails, + countByHost,
+                                        + import java.util.Optional, + import java.util.UUID
+                                        (35 insertions, 0 deletions — nothing else touched)
+
+ No changes to domain/**, pom.xml, or persistence.xml. No new dependencies
+ (Hibernate.initialize comes from hibernate-core, present since Task 01).
+
+ --------------------------------------------------------------------------------
+  CLASS / FUNCTION DEFINITIONS — TASK 03
+ --------------------------------------------------------------------------------
+
+ 1) exception.ApiException  [src/main/java/com/backend/exception/ApiException.java]
+    Purpose: One base for every spec-defined failure a service throws. Carries
+             exactly the three fields a future JAX-RS ExceptionMapper needs to
+             build the §1 error envelope, with zero translation logic.
+
+    - public abstract class ApiException extends RuntimeException
+      Abstract on purpose: there is no such thing as throwing one without a
+      status, so the base can never be instantiated directly.
+
+    Fields (both final, set once in the ctor):
+      private final int status
+      private final String errorCode
+
+    - protected ApiException(int status, String errorCode, String message)
+      Calls super(message). Status is supplied by the concrete subclass only.
+
+    - public int getStatus() / public String getErrorCode()
+      Read verbatim by whatever eventually catches it.
+
+ 2) exception.NotFoundException  [NotFoundException.java]
+    - public NotFoundException(String errorCode, String message) -> super(404, ...)
+    Codes used: LISTING_NOT_FOUND
+
+ 3) exception.ForbiddenException  [ForbiddenException.java]
+    - public ForbiddenException(String errorCode, String message) -> super(403, ...)
+    Codes used: EMAIL_NOT_VERIFIED, NOT_OWNER
+
+ 4) exception.ConflictException  [ConflictException.java]
+    - public ConflictException(String errorCode, String message) -> super(409, ...)
+    Codes used: CANNOT_DELETE_WITH_ACTIVE_BOOKINGS
+
+    Note: each concrete type hardcodes its own status. No constructor anywhere
+    accepts a status parameter, so the status can't drift per call site.
+
+    No ValidationException/400 — deliberately absent. The @NotBlank/@Email/
+    @Positive annotations from Task 01 fire at the JAX-RS boundary via @Valid
+    once that boundary exists (spec §12); duplicating them here would be a
+    second, weaker copy of the same rule.
+
+ 5) service.TransactionRunner  [src/main/java/com/backend/service/TransactionRunner.java]
+    Purpose: The one place EntityManager + EntityTransaction lifecycle lives.
+             Written once instead of in all six service methods.
+
+    - public final class TransactionRunner
+      final + private ctor: pure static utility, never instantiated.
+
+    - @FunctionalInterface public interface Work<T> { T run(EntityManager em); }
+      Declares no checked exception. Nothing in the EntityManager, repository,
+      or exception APIs here throws one, so there is nothing to wrap.
+
+    - @FunctionalInterface public interface VoidWork { void run(EntityManager em); }
+      For methods with nothing to return (delete).
+
+    - public static <T> T call(Work<T> work)
+      em = JpaUtil.createEntityManager(); tx = em.getTransaction();
+      try { tx.begin(); result = work.run(em); tx.commit(); return result; }
+      catch (RuntimeException e) { if (tx.isActive()) tx.rollback(); throw e; }
+      finally { em.close(); }
+      An ApiException thrown inside the lambda is a RuntimeException: it is
+      caught, rolls back, and is rethrown unchanged all the way out.
+
+    - public static void execute(VoidWork work)
+      call(em -> { work.run(em); return null; }) — same boundary, result discarded.
+
+ 6) service.PagedResult  [src/main/java/com/backend/service/PagedResult.java]
+    - public record PagedResult<T>(List<T> items, long totalItems)
+      Generic, not Listing-specific. The §1 paginated envelope is
+      (items, page, size, totalItems, totalPages) and is reused by nearly every
+      collection endpoint in the spec. A service computes the two values that
+      need the database; page/size are the caller's own, totalPages is pure
+      arithmetic, so the eventual envelope builder does that once, generically,
+      instead of every service repeating it.
+
+ 7) service.ListingService  [src/main/java/com/backend/service/ListingService.java]
+    Purpose: Business rules for all six §6 Listings endpoints. Plain stateless
+             class, no constructor, no fields, constructed with `new`.
+
+    - public Listing create(User host, Listing listing)          — POST /listings
+      1. if (!host.isVerified()) throw ForbiddenException("EMAIL_NOT_VERIFIED", ...)
+      2. listing.setHost(host); listing.setStatus(ListingStatus.ACTIVE)
+      3. return TransactionRunner.call(em -> new ListingRepository(em).create(listing));
+      Steps 1-2 are plain field access/mutation on an object already in memory
+      and happen BEFORE any transaction opens. The transaction wraps only persist.
+
+    - public Listing getById(UUID id)                            — GET /listings/{id}
+      TransactionRunner.call: findByIdWithDetails(id).orElseThrow(NOT_FOUND),
+      then Hibernate.initialize(listing.getActivities()), return the Listing.
+      The entity is handed back after the tx commits and the EM closes, so every
+      association a caller might read has to already be loaded. activities is
+      initialized explicitly rather than fetch-joined (see MultipleBagFetchException
+      note in findByIdWithDetails). PUT reuses this exact response shape.
+
+    - public PagedResult<Listing> search(String city, BigDecimal minPrice,
+        BigDecimal maxPrice, Boolean mealsIncluded, Pageable pageable)  — GET /listings
+      TransactionRunner.call: repo.search(...) for the page, repo.countSearch(...)
+      for the total, wrapped in PagedResult. ACTIVE-only is enforced in the
+      repository, not here. All four filters optional (null = no filter).
+
+    - public PagedResult<Listing> findMine(User host, Pageable pageable) — GET /listings/mine
+      TransactionRunner.call: repo.findByHost(host, pageable) + repo.countByHost(host)
+      -> PagedResult. No status filter — the host sees ACTIVE, HIDDEN and REMOVED.
+
+    - public Listing update(User host, UUID listingId, Listing changes) — PUT /listings/{id}
+      TransactionRunner.call: findByIdWithDetails -> orElseThrow(NOT_FOUND) ->
+      requireOwner(existing, host) -> copy the 9 editable fields (title,
+      description, city, address, pricePerNight, currency, mealsIncluded,
+      activities) -> repo.update(existing).
+      `changes` is a partially-populated detached Listing used purely as a
+      carrier for incoming values; it is never persisted. host, status, id and
+      createdAt are NOT copyable — status changes only via delete (REMOVED) or
+      the §10 block side effect (HIDDEN).
+      No Hibernate.initialize on activities: Listing.setActivities() calls
+      clear() first, and that clear() is itself what forces Hibernate to load
+      the about-to-be-discarded old collection — which is fine, we are still
+      inside the transaction.
+
+    - public void delete(User host, UUID listingId)              — DELETE /listings/{id}
+      TransactionRunner.execute: findById -> orElseThrow(NOT_FOUND) ->
+      requireOwner -> if (new BookingRepository(em).existsActiveBookingForListing(listing))
+      throw ConflictException("CANNOT_DELETE_WITH_ACTIVE_BOOKINGS") ->
+      listing.setStatus(ListingStatus.REMOVED); listingRepo.update(listing).
+      Soft delete only. Never em.remove.
+      Uses the cheap findById, not findByIdWithDetails: the only association it
+      touches is listing.getHost().getId(), and Hibernate embeds the FK id in a
+      lazy @ManyToOne proxy without a query, so no load is needed. Nothing is
+      returned to a caller either, so there is no association left uninitialized.
+
+    - private void requireOwner(Listing listing, User host)
+      if (!listing.getHost().getId().equals(host.getId()))
+          throw new ForbiddenException("NOT_OWNER", "You do not own this listing")
+      Shared verbatim by update and delete rather than duplicated.
+
+ 8) repository.ListingRepository — 2 additive methods  [ListingRepository.java]
+    Serves: getById (findByIdWithDetails), update (findByIdWithDetails),
+            findMine (countByHost)
+
+    - public Optional<Listing> findByIdWithDetails(UUID id) : Optional<Listing>
+      JPQL: "SELECT DISTINCT l FROM Listing l JOIN FETCH l.host LEFT JOIN FETCH l.photos
+             WHERE l.id = :id" -> getResultStream().findFirst()
+      Needed because getById and update both return a Listing to a caller after
+      the transaction that loaded it has closed, and §6's GET/PUT response
+      includes photos[] and a host summary block. A lazy proxy would throw on
+      first touch outside a live session.
+      host = inner JOIN FETCH (always present, never null).
+      photos = LEFT JOIN FETCH (a listing may legitimately have zero).
+      DISTINCT is required: fetch-joining a collection repeats the parent row
+      once per child row, so a 3-photo listing would otherwise appear 3 times.
+      activities is deliberately NOT fetch-joined — photos is a List (a "bag"),
+      and fetch-joining two collections in one query risks
+      MultipleBagFetchException. ListingService.getById initializes it separately.
+
+    - public long countByHost(User host) : long
+      JPQL COUNT: "SELECT COUNT(l) FROM Listing l WHERE l.host = :host" -> getSingleResult()
+      Count-side counterpart to the existing findByHost. GET /listings/mine is
+      paginated exactly like GET /listings, so it needs a totalItems just the
+      way the existing search/countSearch pair already provides one.
+
+    New imports added: java.util.Optional, java.util.UUID (countByHost needs nothing new).
+
+ --------------------------------------------------------------------------------
+  CONVENTIONS ESTABLISHED IN TASK 03
+ --------------------------------------------------------------------------------
+   1) Services take resolved domain objects, not tokens (§3.1)
+      Every method that needs to know the caller takes an already-loaded
+      `User`. There is no Auth layer to hand a service a bearer token and none
+      is needed — identifying the caller is upstream work, applying the business
+      rule is not. ListingService.create(User, Listing) is fully callable today;
+      the only missing piece is something that resolves a JWT into that User.
+
+   2) Every public method goes through TransactionRunner (§3.2)
+      No service method calls JpaUtil.createEntityManager(), and no repository
+      is ever constructed outside a TransactionRunner lambda. A repository needs
+      an EntityManager bound to one specific unit of work (Task 02 §3.1) — and
+      that unit of work is exactly what TransactionRunner creates and tears down.
+
+   3) Services are stateless (§3.3)
+      No constructor, no fields. Each method builds the repositories it needs
+      fresh from the `em` its lambda receives. This is also why no wiring is
+      needed yet: @ApplicationScoped on a fieldless class is a one-line change
+      when CDI shows up, not a redesign.
+
+   4) Failures throw, they don't return a code (§3.4)
+      Never null, never a boolean, never a custom result wrapper. Each exception
+      carries the exact status + machine-readable error code the §1 envelope
+      needs, so the eventual mapper is pure passthrough.
+
+   5) Two ways to look up a Listing, deliberately (§3.5)
+      findById (cheap, no joins) for delete, which returns nothing and only
+      needs the host's id. findByIdWithDetails (host + photos fetched) for
+      getById and update, which hand a Listing back to their caller.
+
+ --------------------------------------------------------------------------------
+  DESIGN PATTERNS USED IN TASK 03
+ --------------------------------------------------------------------------------
+   6) Facade / Template Method (TransactionRunner)
+      Definition: A single class owns a multi-step algorithm; callers supply
+      only the varying step via a callback.
+      Applied: TransactionRunner.call(Work<T>) / execute(VoidWork) own the
+               fixed sequence (create EM -> begin -> run -> commit | rollback ->
+               close). The Work/VoidWork functional interfaces are the varying
+               step, supplied as a lambda by each service method. Rollback and
+               close are inherited by every caller for free and cannot be
+               forgotten at a call site.
+      Why: Six service methods all need the same envelope. Written once, the
+           transaction boundary is now impossible to get subtly wrong in one
+           method and right in another.
+
+   7) Null Object / Sentinel via Exception-as-Control-Flow (ApiException hierarchy)
+      Definition: A condition that is a normal, expected outcome of the domain
+      (not found, not owner, conflict) is signalled by a typed object carrying
+      the data needed to respond, rather than by a return value every caller
+      must remember to check.
+      Applied: The 4-class ApiException tree. Each instance carries status +
+      errorCode + message, so the failure travels intact from the throw site to
+      whatever catches it without any intermediate branching.
+      Why: Spec §1 requires a single error envelope. Encoding the response data
+           in the exception removes the possibility of a call site inventing its
+           own error shape, and makes the business rule (this host doesn't own
+           this listing) legible in the source.
+
+   8) Inversion of Control (Work<T> callback)
+      Definition: A component's control flow is inverted — it calls back into
+      code it was handed instead of hardcoding a collaborator.
+      Applied: TransactionRunner has no knowledge of any repository. It hands
+               an EntityManager to a lambda and waits.
+      Why: Keeps the transaction infrastructure unaware of the domain, so it
+           stays reusable for BookingService, MessageService, AuthService, etc.
+           unchanged.
+
+   Patterns deliberately NOT introduced:
+    - Service Locator / static singleton service instance — ListingService is
+      `new`'d like Task 02's repositories; CDI comes later as a one-line change.
+    - Result/Wrapper return type (e.g. a Result<T> instead of PagedResult for
+      errors) — would duplicate what the exception tree already expresses, and
+      would force every call site into a match/if.
+
+ --------------------------------------------------------------------------------
+  DEFERRED (§8) — STILL NOT BUILT
+ --------------------------------------------------------------------------------
+   - Exception mapper: nothing yet catches ApiException and turns
+     getStatus()/getErrorCode()/getMessage() into the §1 JSON envelope. That is
+     a JAX-RS ExceptionMapper and needs the Resource layer to exist first.
+   - DTOs for Listing: create/update take a partially-populated Listing entity
+     as their "changes" input rather than a request DTO, and return the entity
+     rather than a response DTO. When the Resource layer arrives it maps DTO ->
+     Listing before calling in and Listing -> DTO after. ListingService does not
+     change either way.
+   - Photo endpoints: POST/DELETE /listings/{id}/photos need a storage decision
+     (spec §14.3) this project has not made.
+
+   Also still deferred from earlier tasks, unchanged by this one:
+   - Auth/JWT: no token parsing, no interceptor, no @RolesAllowed. Every service
+     method takes an already-resolved User.
+   - Booking/Message/Report/User/Auth services: not attempted; Task 03 covers
+     Listings only.
+   - Booking auto-reject workflow: BookingRepository.findOverlapping (Task 02)
+     is the query; the looping/rejecting orchestration is still Service work,
+     for the Booking task.
+   - GET /messages/conversations: still needs a DTO projection.
+   - CDI wiring (@ApplicationScoped / @Inject / @Produces): still absent.
+   - Page size clamping (max 100): Task 02 left this to the Service/Resource
+     layer; this task passes Pageable through unchanged rather than clamping in
+     search/findMine, so it is still an unwritten Resource-layer concern.
+
+ --------------------------------------------------------------------------------
+  VERIFICATION
+ --------------------------------------------------------------------------------
+   - 7 new files, 1 existing file edited, exactly as §2's manifest.
+   - ListingRepository.java diff: 35 insertions, 0 deletions — 2 imports, 2 methods.
+   - No domain/** change, no pom.xml change, no persistence.xml change, no new dependency.
+   - mvn -q -DskipTests compile -> BUILD SUCCESS (no errors, no warnings).
+   - grep "getTransaction" src/main/java/com/backend/service/ -> exactly 1 file,
+     TransactionRunner.java. No service method touches a transaction directly.
+   - grep "javax" over exception/ and service/ -> 0 hits (Jakarta imports only).
+   - ApiException is abstract; no constructor anywhere accepts a status parameter.
+   - Every ListingService method that reads or writes data does so only inside a
+     TransactionRunner.call/execute lambda. The only code outside one is
+     create()'s isVerified() guard and its setHost/setStatus, which is correct —
+     those are plain field operations on an in-memory object needing no EM.
+
+   Manual smoke (needs a persisted verified User first, since there is no Auth yet
+   to hand ListingService a caller — same shape as PersistenceSmokeCheck):
+     User host = new User(); host.setEmail("h@x.com"); host.setPasswordHash("x");
+     host.setFullName("H"); host.setRole(UserRole.HOST); host.setVerified(true);
+     TransactionRunner.execute(em -> new UserRepository(em).create(host));
+     Listing l = new Listing(); l.setTitle("Riad"); l.setCity("Marrakesh");
+     l.setPricePerNight(new BigDecimal("120.00"));
+     ListingService svc = new ListingService();
+     Listing saved = svc.create(host, l);
+     svc.getById(saved.getId());                       // host + photos + activities readable
+     svc.search("Marrakesh", null, null, null, new Pageable(0, 20));
+     svc.findMine(host, new Pageable(0, 20));          // totalItems == 1
+     svc.delete(host, saved.getId());                  // status -> REMOVED
+   NOT BUILT: no such script was added to the repo — Task 03 §0 excludes tests.
+   Say the word and a PersistenceSmokeCheck-shaped ListingServiceSmokeCheck
+   can be added.
+
+ --------------------------------------------------------------------------------
+  AMBIGUITIES FOUND IN API-SpecIFICATION.md §6 AND HOW THEY WERE RESOLVED
+ --------------------------------------------------------------------------------
+   (Note: API-Specification.md itself is not in the repo — these are read off the
+    §6 excerpts quoted inside TASK-03.md, so treat them as "worth confirming"
+    rather than as claims about the spec text.)
+
+   1. §6 shows "a host summary block" for GET /listings/{id} but never lists
+      which host fields it contains.
+      Resolution: did not guess. getById returns the whole Listing with host
+      eagerly fetched; picking a subset of host fields is a DTO decision, and
+      DTOs are explicitly out of scope (§8). The Resource layer narrows it.
+
+   2. §6 does not say whether GET /listings/{id} should 404 for a REMOVED or
+      HIDDEN listing. search() is ACTIVE-only, so those listings already vanish
+      from the public list, but getById has no status filter at all and will
+      return one to any caller who knows the id.
+      Resolution: followed TASK-03 §7 literally — no status filter. This is the
+      one behaviour I'd most want a second opinion on before the Resource layer
+      ships: probably non-ACTIVE listings should be visible to the owner and
+      404 for everyone else, which is a check the service or the resource will
+      need. Flagged, not silently changed.
+
+   3. §6 does not say whether PUT /listings/{id} is allowed to change status.
+      Resolution: treated as no. status, host, id and createdAt are not among
+      the 9 fields update() copies; status is only ever written by delete()
+      (REMOVED) or the §10 block side effect (HIDDEN). That keeps a host from
+      un-hiding a listing removed by an admin by round-tripping PUT.
+
+   4. §6's paginated envelope is (items, page, size, totalItems, totalPages) but
+      PagedResult carries only items + totalItems.
+      Resolution: intentional. page and size are the caller's own inputs, and
+      totalPages is arithmetic on totalItems/size — neither needs the database,
+      so neither belongs in a repository-backed result. The envelope builder
+      will add them once, generically.
+
+   5. §6's PUT semantics ("full replace") vs. a partial PATCH.
+      Resolution: PUT is implemented as a full replace of the editable fields,
+      exactly as TASK-03 §7 specifies. A PATCH would need null-vs-absent
+      distinction, which a partially-populated entity cannot express; that needs
+      a DTO, so it stays out of scope.
+
+ --------------------------------------------------------------------------------
+  REPORT BACK (per TASK-03 §10)
+ --------------------------------------------------------------------------------
+   1. Files: exception/{ApiException, NotFoundException, ForbiddenException,
+      ConflictException}.java, service/{TransactionRunner, PagedResult,
+      ListingService}.java. Repository additions: ListingRepository
+      .findByIdWithDetails(UUID) and .countByHost(User).
+   2. countByHost is understood as a Task 02 miss being corrected now, not a new
+      requirement of this task. Task 02 added findByHost without its count-side
+      counterpart, the same way it already paired search with countSearch;
+      building findMine surfaced the gap. Nothing in Task 03's own scope asked
+      for a new count query — it asked for the missing half of an existing pair.
+   3. §8's three deferred items are all still deferred and all still blocked on
+      the same prerequisite (a Resource layer / a storage decision): exception
+      mapper, Listing DTOs, photo endpoints. Nothing from §0 leaked in — no
+      Auth, no JAX-RS, no CDI, no ValidationException, no Booking/Message/
+      Report/User/Auth service, no tests, no pom or persistence.xml change.
+
+  Suggested commit:
+   feat: add transaction runner, API exceptions, and ListingService
+
+   TransactionRunner wraps EntityManager+transaction lifecycle once;
+   every ListingService method goes through it, never touches
+   EntityManager directly. ApiException + NotFound/Forbidden/Conflict
+   give services a way to signal spec-defined error conditions without
+   a Resource layer to catch them yet. PagedResult<T> is shared,
+   reusable pagination-count carrier. ListingRepository gains
+   findByIdWithDetails and countByHost (Task 02 gap). No DTOs, no
+   JAX-RS, no CDI, no Auth yet — ListingService takes an already-
+   resolved User and plain entities.
 ================================================================================
