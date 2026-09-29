@@ -356,12 +356,154 @@
  Stack: Java 21 · Jakarta EE 10 (Persistence 3.1, Validation 3.0) · Hibernate 6.4.4 · PostgreSQL
 ================================================================================
 
- Goal: Give the Service layer a real transaction boundary and a way to signal
+  Goal: Give the Service layer a real transaction boundary and a way to signal
        spec-defined failures without a Resource layer to catch them yet.
        ListingService covers all six §6 Listings endpoints.
 
- Deliverable: 7 new files + 2 additive methods in 1 existing file. No tests
-              (explicitly out of scope per §0).
+  Deliverable: 7 new files + 2 additive methods in 1 existing file. No tests
+               (explicitly out of scope per §0).
+
+ --------------------------------------------------------------------------------
+  PURPOSE — WHAT TASK 03 IS FOR, AND WHY IT FOLLOWS 01 AND 02
+ --------------------------------------------------------------------------------
+
+  THE SHORT VERSION
+    Task 01 built the nouns. Task 02 built the verbs that read and write them.
+    Task 03 builds the rules — the layer that decides whether an operation is
+    allowed, and that owns the transaction the operation runs in.
+    Without it, Tasks 01+02 are a working database access library with no
+    business logic anywhere in the project.
+
+  WHERE THE THREE TASKS SIT IN THE SPEC'S LAYERING (§1: Resource -> Service -> Repository)
+    +------------------------------------------------------------------+
+    |  api/         <-- NOT BUILT YET  (Task 04+)  HTTP, DTOs, auth,     |
+    |                 the only layer that knows about status codes,      |
+    |                 JSON, bearer tokens, @Valid, exception mappers     |
+    +------------------------------------------------------------------+
+    |  service/     <-- THIS TASK.  Business rules + transaction         |
+    |                 boundary. Knows "is this host allowed to do this?"  |
+    |                 and "do these two writes belong in one commit?"    |
+    |                 Knows nothing about HTTP.                         |
+    +------------------------------------------------------------------+
+    |  repository/  <-- TASK 02.  Query construction only.               |
+    |                 "listings matching these filters, page N".         |
+    |                 Knows nothing about business rules.               |
+    +------------------------------------------------------------------+
+    |  domain/      <-- TASK 01.  Shape + mapping + invariants.         |
+    +------------------------------------------------------------------+
+    |  persistence/ <-- TASK 02.  Who owns the EntityManagerFactory.    |
+    +------------------------------------------------------------------+
+
+  WHAT TASK 01 GAVE TASK 03 (and it is not re-litigated here)
+    - The entities Task 03 operates on: Listing, User, Photo, and the
+      ListingStatus enum. TASK-03 §0 explicitly forbids touching domain/** —
+      ListingService never adds a field, an annotation, or a validation rule to
+      an entity. Business rules live in the service, not smeared into the model.
+    - The lazy/eager shape of those entities, which dictates task design:
+      every @ManyToOne is LAZY and `activities` is a LAZY @ElementCollection
+      (§Task 01). A lazy association read outside a live session throws
+      LazyInitializationException. That single fact is why Task 03 needs
+      (a) a transaction boundary that stays open for exactly the right amount
+      of time, and (b) a fetch strategy for anything handed back to a caller.
+      TASK-03 §3.5 (cheap findById vs findByIdWithDetails) and §6.1 are both
+      direct consequences of a Task 01 decision, not new preferences.
+    - The `equals`/`hashCode` convention (id-based, proxy-safe, `Class.hashCode()`)
+      which is what makes `listing.getHost().getId()` safe to call on a lazy
+      proxy in delete()'s ownership check.
+    - `Listing.setActivities(...)` clear-then-addAll behaviour, which is why
+      `update` needs no explicit Hibernate.initialize but `getById` does.
+    - hibernate-core, already a dependency — so `Hibernate.initialize(...)` used
+      by getById costs nothing new. No pom.xml change in this task.
+
+  WHAT TASK 02 GAVE TASK 03
+    - JpaUtil: the single owner of the EntityManagerFactory. Task 03's
+      TransactionRunner calls `JpaUtil.createEntityManager()` and is the *only*
+      class in service/ that does. Task 02 deliberately shipped with "no
+      transaction management (Service layer concern per spec §1)" — that
+      concern is exactly what Task 03 now delivers, so the two tasks hand off
+      cleanly rather than overlapping.
+    - The repository layer, borrowed not owned. Every repository takes an
+      EntityManager as a constructor argument and never creates or closes one
+      (Task 02 §3.1). That is what makes TransactionRunner possible: it creates
+      the EM, hands it to the lambda, and the lambda uses it to `new
+      ListingRepository(em)` — the repo has no idea a transaction is happening.
+      Had Task 02's repos created their own EntityManagers, the entire
+      TransactionRunner design would be impossible.
+    - ListingRepository itself. create/getById/search/findMine/update/delete in
+      ListingService map almost 1:1 onto existing repo methods: create->create,
+      search->search+countSearch, findMine->findByHost, update->update,
+      delete->update (soft) + BookingRepository.existsActiveBookingForListing.
+      ListingService is mostly orchestration and rules, not new SQL.
+    - Pageable, used unchanged as the pagination input to search and findMine.
+      Task 02 left size-clamping (max 100) to the Service/Resource layer; this
+      task passes it through rather than clamping, so that stays open.
+    - The two Task 02 gaps Task 03 had to close. Building a real caller exposed
+      that findByHost had no count-side counterpart (countByHost — the same
+      search/countSearch pairing already existed for the public search), and
+      that no repo method loaded a Listing with its associations fetched
+      (findByIdWithDetails — needed the moment a Listing outlives the
+      transaction that read it). Both are additive; no Task 02 method was
+      renamed, re-signed, or removed.
+
+  WHAT TASK 03 ADDS BACK TO THE PILE
+    - TransactionRunner: the missing transaction boundary. It is the one place
+      in the whole codebase allowed to call getTransaction(), which is the
+      mechanical guarantee that no service method opens a half-finished
+      transaction. Every future service (Booking, Message, Report, Auth) reuses
+      it unchanged.
+    - The ApiException tree: how a layer with no HTTP awareness signals a
+      failure. status + errorCode + message are exactly the §1 error envelope,
+      so a future ExceptionMapper is pure passthrough with no translation logic.
+    - PagedResult<T>: the count-side half of the §1 paginated envelope, generic
+      and shared, so Booking/Message/Admin services do not each invent their own.
+    - ListingService: the first real business rules in the project — verified
+      email to publish, owner-only to edit or delete, no delete while bookings
+      are pending/confirmed, soft delete rather than hard.
+
+  THE CONVERSATION THIS TASK HAD TO HAVE FIRST
+    There is no Auth layer yet, so nothing can hand a service a "who is calling".
+    Task 03 resolves this by having every method that needs the caller take an
+    already-resolved `User` (TASK-03 §3.1). ListingService.create(User, Listing)
+    is therefore fully callable today; the only missing piece is upstream, and
+    it belongs to Task 04+ with the Resource layer. The alternative — stubbing
+    a fake auth context — would have been a layer that had to be thrown away.
+
+  WHAT THIS TASK DELIBERATELY DID *NOT* DO
+    It stopped at the service layer. No DTOs, no JAX-RS resources, no exception
+    mapper, no CDI annotations, no JWT parsing, no ValidationException/400, no
+    services other than Listing, no photo endpoints, no tests. Every one of
+    those is either blocked on a missing prerequisite (storage backend for
+    photos, a Resource layer for DTOs and mappers) or is a Resource-layer
+    concern (400s via @Valid, HTTP status knowledge). Building them here would
+    have meant building things twice.
+
+ --------------------------------------------------------------------------------
+  TASK 03 CONVENTIONS — AND WHERE EACH ONE CAME FROM
+ --------------------------------------------------------------------------------
+
+   Convention                        Origin            Why it exists
+   --------------------------------- ----------------- ---------------------------------
+   Services take a resolved User,    TASK-03 §3.1      no Auth exists to hand a
+   never a token                                        service a caller identity;
+                                                       identifying is not a service's job
+   Everything through                TASK-02 §3.1 +    repos borrow an EM, they never
+   TransactionRunner                 spec §1            own one; so *someone* must
+                                                       create it, and that someone is
+                                                       exactly one class
+   Stateless service, `new` it       spec §1            keeps it testable now and
+                                                       a one-line @ApplicationScoped
+                                                       change later
+   Throw, don't return a code        spec §1 error      one envelope for every failure;
+                                     envelope           no per-callsite error shapes
+   Cheap findById vs                 TASK 01 lazy       Task 02 shipped both a cheap
+   findByIdWithDetails               associations       and no detailed finder; the
+                                                       detailed one was added here
+                                                       because a caller finally existed
+   No domain/** edits                TASK-03 §0         rules belong in the service layer;
+                                                       Task 01's model is the contract
+
+ --------------------------------------------------------------------------------
+
 
  Files created (src/main/java/com/backend):
    1. exception/ApiException.java        abstract base — status + errorCode + message

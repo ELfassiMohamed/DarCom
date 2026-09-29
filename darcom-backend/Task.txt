@@ -262,23 +262,70 @@
   - Booking auto-reject workflow : findOverlapping is the query; looping/rejecting is Service orchestration.
    - CDI wiring (@ApplicationScoped/@Inject/@Produces) : repositories stay plain new XRepository(em); wiring later.
 
-  ================================================================================
-   TASK 03 — Transactions, Exceptions & Listing Service
-   (Full detail in the root Task.txt — this file is the condensed mirror.)
-  ================================================================================
-   Files created (7):
-     exception/ApiException.java        abstract base, status + errorCode + message
-     exception/NotFoundException.java   404
-     exception/ForbiddenException.java  403
-     exception/ConflictException.java   409
-     service/TransactionRunner.java     EM + tx lifecycle: call(Work<T>) / execute(VoidWork)
-     service/PagedResult.java           record PagedResult<T>(List<T> items, long totalItems)
-     service/ListingService.java        create/getById/search/findMine/update/delete
-   File edited (1): repository/ListingRepository.java
-     + findByIdWithDetails(UUID)  — JOIN FETCH host, LEFT JOIN FETCH photos, DISTINCT
-     + countByHost(User)         — count-side counterpart to Task 02's findByHost
-     + imports java.util.Optional, java.util.UUID   (35 insertions, 0 deletions)
-   No domain/**, pom.xml, or persistence.xml change. No new dependencies.
+   ================================================================================
+    TASK 03 — Transactions, Exceptions & Listing Service
+    (Full detail in the root Task.txt — this file is the condensed mirror.)
+   ================================================================================
+    PURPOSE: Task 01 built the nouns (entities), Task 02 built the verbs that read
+      and write them (repositories). Task 03 builds the rules — the layer that
+      decides whether an operation is allowed and owns the transaction it runs in.
+      Without it, 01+02 are a database access library with no business logic.
+
+    LAYERING (spec §1: Resource -> Service -> Repository):
+      api/       NOT BUILT (Task 04+)  HTTP, DTOs, auth, @Valid, exception mappers
+      service/   THIS TASK            business rules + transaction boundary
+      repository/TASK 02              query construction only, no rules
+      domain/    TASK 01              shape + mapping + invariants
+      persistence/ TASK 02            who owns the EntityManagerFactory
+
+    FROM TASK 01: the entities Task 03 operates on (no domain/** edits — rules
+      live in the service, not the model); the LAZY association shape, which is
+      *why* a transaction boundary and a fetch strategy are needed at all; the
+      proxy-safe id-based equals/hashCode that makes delete()'s ownership check
+      safe on a proxy; setActivities()' clear-then-addAll, which is why update
+      needs no explicit initialize but getById does; hibernate-core, so
+      Hibernate.initialize() costs no new dependency.
+
+    FROM TASK 02: JpaUtil, whose createEntityManager() TransactionRunner is the
+      only caller of; the borrow-not-own repository contract (repos never create
+      or close an EM), which is exactly what makes TransactionRunner possible;
+      ListingRepository, which already covers most of what ListingService needs;
+      Pageable, passed through unchanged. Task 02 shipped with "no transaction
+      management (Service layer concern)" — that concern is what Task 03 delivers,
+      so the two hand off cleanly rather than overlap.
+    Task 02 gaps closed here: findByHost had no countByHost; no repo method
+      fetched a Listing's associations. Both additive, no method re-signed.
+
+    ADDS BACK: TransactionRunner (one place in the codebase allowed to call
+      getTransaction(), reused by every future service), the ApiException tree
+      (status + errorCode + message = the §1 envelope, so a future ExceptionMapper
+      is pure passthrough), PagedResult<T> (shared, generic), and ListingService
+      (the project's first real business rules).
+
+    THE PROBLEM THIS TASK HAD TO SOLVE FIRST: no Auth layer exists, so nothing
+      can hand a service a "who is calling". Resolved by having every such method
+      take an already-resolved User (§3.1) — create(User, Listing) is fully
+      callable today; resolving that User from a JWT is Task 04+ work. A fake
+      auth context here would have been a layer built to be thrown away.
+
+    STOPPED AT THE SERVICE LAYER: no DTOs, JAX-RS, exception mapper, CDI, JWT
+      parsing, ValidationException/400, non-Listing services, photo endpoints, or
+      tests. Each is either blocked on a missing prerequisite or is a Resource
+      concern; building them now would mean building them twice.
+
+    Files created (7):
+      exception/ApiException.java        abstract base, status + errorCode + message
+      exception/NotFoundException.java   404
+      exception/ForbiddenException.java  403
+      exception/ConflictException.java   409
+      service/TransactionRunner.java     EM + tx lifecycle: call(Work<T>) / execute(VoidWork)
+      service/PagedResult.java           record PagedResult<T>(List<T> items, long totalItems)
+      service/ListingService.java        create/getById/search/findMine/update/delete
+    File edited (1): repository/ListingRepository.java
+      + findByIdWithDetails(UUID)  — JOIN FETCH host, LEFT JOIN FETCH photos, DISTINCT
+      + countByHost(User)         — count-side counterpart to Task 02's findByHost
+      + imports java.util.Optional, java.util.UUID   (35 insertions, 0 deletions)
+    No domain/**, pom.xml, or persistence.xml change. No new dependencies.
 
    Conventions: services take a resolved User (no token parsing); every method
    goes through TransactionRunner (no direct JpaUtil/getTransaction outside it);
