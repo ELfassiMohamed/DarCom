@@ -343,10 +343,71 @@
    only in TransactionRunner.java; no javax in exception/ or service/;
    ApiException abstract with no status-taking constructor.
 
-   §6 ambiguity worth confirming: getById has no status filter, so a REMOVED or
-   HIDDEN listing is still readable by anyone with the id (search is ACTIVE-only).
-   Likely needs an owner-only rule at the Resource layer. Not silently changed.
+    §6 ambiguity worth confirming: getById has no status filter, so a REMOVED or
+    HIDDEN listing is still readable by anyone with the id (search is ACTIVE-only).
+    Likely needs an owner-only rule at the Resource layer. Not silently changed.
+   ================================================================================
+
   ================================================================================
+   TASK 04 — Auth: Register, Login, Refresh, Logout
+   (Full detail in the root Task.txt — this file is the condensed mirror.)
+  ================================================================================
+   PURPOSE: the first service that answers "who is calling" — the thing Task 03
+     explicitly deferred. Covers the four core §4 endpoints; issuing only
+     (nothing parses a bearer token back into a User yet).
+
+   RELATION TO 01/02/03: Task 01 designed User + RefreshToken for exactly this
+     (unique email, passwordHash 255, tokenHash-never-raw, role, verified/blocked,
+     zero collections on User so AuthResult.user needs no initialize) — used, not
+     modified. Task 02's auth-side repos (existsByEmail, findByEmail, findByTokenHash,
+     deleteByTokenHash) were complete: unlike Task 03, this task added ZERO repo
+     methods, and its Dotenv pattern is reused verbatim by JwtService.loadKey().
+     Task 03 supplied the rails — TransactionRunner (refresh's same-tx rotation
+     guarantee is only expressible because of it), the exception family +
+     extension pattern (401 was the one empty slot), and the stateless/throw-only
+     conventions. Cross-task proof the layering works: register() writes
+     verified=false, which is exactly the flag ListingService.create() already
+     guards on. Producing the resolved User is this task; resolving a bearer
+     token back into one still waits on the Resource layer (no speculative
+     verify/parse built).
+
+   Files created (6):
+     exception/UnauthorizedException.java  401 — first 401 the codebase needed
+     security/PasswordHasher.java          bcrypt cost 12, char[]-based
+     security/RefreshTokenHasher.java      SecureRandom gen + SHA-256 hash
+     security/JwtService.java              HS-signed access tokens, 15-min TTL
+     service/AuthResult.java               record(accessToken, refreshToken, user)
+     service/AuthService.java              register/login/refresh/logout
+   Edited: pom.xml (+bcrypt, +jjwt-api compile, +jjwt-impl/+jjwt-jackson runtime).
+     .env (+JWT_SECRET, 64 CSPRNG bytes base64, gitignored/local-only).
+   No .java file modified; no domain/persistence/repository/persistence.xml change.
+
+   Conventions: passwords only via matches(), never .equals; client sees raw
+   refresh token, DB only its SHA-256; refresh = rotation in one transaction
+   (single-use); login returns identical INVALID_CREDENTIALS for unknown email
+   and wrong password. Task 03 conventions inherited (TransactionRunner,
+   stateless service, typed exceptions only).
+
+   Error codes: INVALID_ROLE (403), EMAIL_ALREADY_EXISTS (409),
+   INVALID_CREDENTIALS (401), ACCOUNT_BLOCKED (403), INVALID_REFRESH_TOKEN (401).
+
+   Still deferred: JWT verification, email verification + password reset,
+   login rate limiting (explicit gap), expired-token cleanup, plus all earlier
+   deferrals (DTOs, JAX-RS, mapper, CDI, photos, tests).
+
+   Verification: compile BUILD SUCCESS; getTransaction only in TransactionRunner;
+   AuthService throws only Forbidden/Conflict/Unauthorized; no raw password
+   exposure. §9.8 NOTE: one `javax.` hit exists — `javax.crypto.SecretKey` in
+   JwtService — and it is UNAVOIDABLE: it is in the task's own §5.3 verbatim code,
+   javax.crypto is JDK JCE (no jakarta equivalent), JJWT returns that type.
+   No legacy javax.* Jakarta imports anywhere new.
+
+   FLAGS: (1) register returns just the User, no tokens — confirm whether the
+   spec wants auto-login (one-line change, but reshapes the future register DTO).
+   (2) register sets verified=false, and ListingService.create rejects unverified
+   hosts — so verify-email is now the critical path to a working host flow.
+  ================================================================================
+
 
 
 
