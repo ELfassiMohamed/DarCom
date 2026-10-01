@@ -896,3 +896,518 @@
    JAX-RS, no CDI, no Auth yet — ListingService takes an already-
    resolved User and plain entities.
 ================================================================================
+
+
+================================================================================
+ TASK 04 — Auth: Register, Login, Refresh, Logout
+ DarCom Co-Hosting Platform (darcom-backend)
+ Stack: Java 21 · Jakarta EE 10 · Hibernate 6.4.4 · PostgreSQL
+        + at.favre.lib:bcrypt 0.10.2, io.jsonwebtoken:jjwt-{api,impl,jackson} 0.13.0
+================================================================================
+
+ Goal: The first service that answers "who is calling" — the thing Task 03
+       explicitly deferred. AuthService covers the four core §4 endpoints
+       (register/login/refresh/logout) plus the crypto to back them. Issuing
+       only: nothing here turns a bearer token back into a User yet.
+
+ Deliverable: 6 new files, 4 new pom.xml dependencies, 1 new .env variable.
+              No existing .java file modified. No tests (§0).
+
+ Files created (src/main/java/com/backend):
+   1. exception/UnauthorizedException.java  401 — first 401 this codebase needed
+   2. security/PasswordHasher.java          bcrypt, cost 12
+   3. security/RefreshTokenHasher.java      SecureRandom gen + SHA-256 hash
+   4. security/JwtService.java              HS-signed access tokens, 15-min TTL
+   5. service/AuthResult.java                record(accessToken, refreshToken, user)
+   6. service/AuthService.java               register / login / refresh / logout
+
+ Files edited: pom.xml only (+4 dependencies, §1.1). .env only (+JWT_SECRET, §1.2).
+ No change to domain/**, persistence/**, repository/**, or persistence.xml.
+
+ New dependencies (pom.xml):
+   at.favre.lib:bcrypt 0.10.2 (compile) — hand-rolling PBKDF2 with the JDK's
+     own salt/iteration logic is exactly the kind of thing that's easy to get
+     subtly wrong; at.favre.lib over jbcrypt = maintained, char[]-based API,
+     higher cost ceiling.
+   io.jsonwebtoken:jjwt-api 0.13.0 (compile) — the only artifact code is written
+     against; jjwt-impl + jjwt-jackson 0.13.0 are runtime scope per JJWT's own
+     convention (impl internals aren't semver-stable). jjwt-jackson reuses the
+     jackson-databind already on the classpath.
+
+  New secret (.env, gitignored — never committed):
+   JWT_SECRET=<64 random bytes, base64> — generated with a CSPRNG
+   (System.Security.Cryptography.RandomNumberGenerator), 88 base64 chars.
+   Decodes to 64 bytes, well over HS256's 32-byte minimum, so JJWT's
+   single-arg signWith picks HS512 automatically with no extra code.
+
+ --------------------------------------------------------------------------------
+  PURPOSE — WHAT TASK 04 IS FOR, AND WHY IT FOLLOWS 01, 02 AND 03
+ --------------------------------------------------------------------------------
+
+  THE SHORT VERSION
+    Tasks 01–03 built a system that can store users and enforce rules about
+    them — but with no way to tell users apart at the door. Every service
+    method takes "an already-resolved User" (Task 03 §3.1) and until now that
+    User could only be hand-constructed. Task 04 builds the front door: the
+    thing that turns a stranger with an email and a password into that resolved
+    User, and hands them two tokens proving it. It is only half a front door
+    on purpose — it issues tokens but nothing reads one back yet, because the
+    place that needs to read them (a request filter in front of protected
+    endpoints) doesn't exist until the Resource layer does.
+
+  WHERE THE FOUR TASKS SIT IN THE SPEC'S LAYERING (§1: Resource -> Service -> Repository)
+    +------------------------------------------------------------------+
+    |  api/         <-- STILL NOT BUILT (Task 05+)  HTTP, DTOs, filters, |
+    |                 the only layer that will ever parse a bearer token |
+    |                 back into a User, @Valid, exception mappers        |
+    +------------------------------------------------------------------+
+    |  service/     <-- THIS TASK JOINS IT.  AuthService next to         |
+    |                 ListingService. Same TransactionRunner, same        |
+    |                 throw-don't-return rule, same stateless `new` shape.|
+    |                 Knows "are these credentials valid?" Knows nothing  |
+    |                 about HTTP.                                        |
+    +------------------------------------------------------------------+
+    |  security/    <-- THIS TASK CREATES IT.  Pure functions of crypto: |
+    |                 hash a password, mint a token, hash a token. No EM, |
+    |                 no transaction, no repository — callable from       |
+    |                 anywhere, testable without a database.             |
+    +------------------------------------------------------------------+
+    |  repository/  <-- TASKS 02/03.  Untouched this time — and that is  |
+    |                 the point: auth needed zero new queries. Every      |
+    |                 lookup AuthService performs already existed.       |
+    +------------------------------------------------------------------+
+    |  domain/      <-- TASK 01.  Untouched — User and RefreshToken were  |
+    |                 designed for exactly this task two tasks early.    |
+    +------------------------------------------------------------------+
+    |  persistence/ <-- TASK 02.  Untouched — but its Dotenv pattern is  |
+    |                 reused verbatim by JwtService.loadKey().           |
+    +------------------------------------------------------------------+
+
+  WHAT TASK 01 GAVE TASK 04 (designed for it two tasks early)
+    - The User entity, whose every security-relevant field gets used: email
+      (unique — the login key and the register duplicate check), passwordHash
+      (255 chars — a bcrypt hash is 60, fits with room), role (the INVALID_ROLE
+      guard and the JWT "role" claim), verified/blocked (register forces both
+      false; login refuses blocked). TASK-04 §0 forbids touching domain/** —
+      AuthService never adds a field or annotation. The model was already the
+      contract; this task just finally exercises it.
+    - The RefreshToken entity, which is the entire reason RefreshTokenHasher
+      exists: tokenHash (unique, 512 — stores a SHA-256 hex, never the raw
+      value), expiresAt + isExpired() (the reject-and-delete path in refresh).
+      Task 01's "stores hash never raw" comment was a promise; Task 04 is the
+      code that keeps it.
+    - UserRole (HOST/VISITOR/ADMIN) — the three-way split that makes "only HOST
+      or VISITOR may self-register" expressible in one line.
+    - Zero collections on User by design (Task 01 §3.9) — which is why
+      AuthResult can safely carry the User past the transaction close with no
+      Hibernate.initialize call, unlike ListingService.getById's Listing.
+
+  WHAT TASK 02 GAVE TASK 04 (used, not modified)
+    - UserRepository.existsByEmail (register's duplicate check) and findByEmail
+      (login's lookup). Both written for "POST /auth/register (duplicate),
+      POST /auth/login" per Task 02's own comments — this task is literally the
+      caller those comments were waiting for.
+    - RefreshTokenRepository.findByTokenHash, deleteByTokenHash, create, and the
+      inherited delete — refresh and logout are composed entirely from them.
+    - The contrast with Task 03 matters: building ListingService exposed two
+      missing repository methods and Task 03 had to add them. Building
+      AuthService exposed zero — Task 02's auth-side repositories were complete.
+      That is why §2's manifest says "no existing .java file edited" while Task
+      03's said one file edited. The asymmetry is evidence Task 02's authors
+      anticipated auth's queries correctly.
+    - The Dotenv pattern from JpaUtil, reused verbatim in JwtService.loadKey() —
+      same library, same load-once shape, same fail-loud philosophy (WeakKeyException
+      here plays the role a bad PU name would play there).
+    - deleteAllExpired(), still uncalled — the deferred cleanup job (§8). Present
+      since Task 02, still waiting for a scheduler.
+
+  WHAT TASK 03 GAVE TASK 04 (the rails it runs on)
+    - TransactionRunner — every AuthService method goes through it, and the
+      rotation guarantee ("delete old + persist new in the SAME transaction")
+      is only expressible because Task 03 separated the boundary from the work.
+      Without it, refresh would be two transactions with a crash window between
+      "old token dead" and "new token alive."
+    - The exception family and its extension pattern. UnauthorizedException is
+      added exactly the way Task 03 §6 added repository methods: same package,
+      same shape, hardcoded status, no existing file touched. The 401 slot was
+      empty because nothing before auth could produce "not authenticated" —
+      Listing's failures are all 403/404/409 by nature.
+    - All of §3's conventions via §3.5: stateless service, repos built fresh
+      inside the lambda, failures throw. AuthService introduces no new service
+      convention of its own — §3.1–3.4 are security rules, not service plumbing.
+    - The consumer side of auth itself. Task 03 §3.1 said "every method takes an
+      already-resolved User... the only thing missing is something upstream that
+      resolves a JWT into that User." Task 04 builds the producer side — but
+      deliberately only the issuing half. The resolving half (verify/parse) is
+      still upstream work, now precisely scoped: it waits on the Resource layer,
+      not on any more service code.
+    - The cross-task interaction that proves the layering works: register()
+      sets verified=false, and ListingService.create() rejects unverified hosts
+      with EMAIL_NOT_VERIFIED. Two tasks written weeks apart compose with no
+      glue code — the Task 03 guard was waiting for exactly the flag Task 04
+      now writes.
+    - PagedResult as precedent for AuthResult: small shared carrier records
+      that keep multi-value returns typed without inventing a wrapper framework.
+
+  WHAT TASK 04 ADDS BACK TO THE PILE
+    - PasswordHasher: the project's only password code, behind a two-method API
+      that makes the wrong thing (comparing strings) unexpressible at call sites.
+    - JwtService: the issuing half of token auth, with the key discipline
+      (eager load, fail loud on weak keys, minimal claims, strongest-HMAC
+      selection) baked in so no later caller can get it wrong.
+    - RefreshTokenHasher: the split-knowledge half — raw for the wire, hash for
+      the disk — with the fast-hash/slow-hash choice documented at the call site.
+    - AuthService: the first code in the project that mints identity. Every
+      future protected endpoint's filter will resolve against exactly the rows
+      and tokens this service writes.
+    - UnauthorizedException: completes the status family (401/403/404/409) —
+      there is now no HTTP error class the service layer needs that it lacks
+      short of the 400 that belongs to @Valid at the boundary.
+
+  THE PROBLEM THIS TASK HAD TO SOLVE FIRST
+    A token system has two halves — minting and checking — and the natural
+    instinct is to build both. But checking a bearer token means turning it
+    into a User on every request, which needs a home (a JAX-RS filter in front
+    of protected endpoints) that cannot exist before the Resource layer. So
+    Task 04 issues only, and JwtService has no verify/parse method — the same
+    reasoning as Task 03's "no fake auth context": a verification method with
+    no caller would be speculative code rotting until Task 05+, or worse, two
+    competing verification paths when the real one arrives. The task says what
+    the follow-up is (§8: "a small, natural follow-up when that task arrives")
+    instead of pre-building it.
+
+  WHAT THIS TASK DELIBERATELY DID *NOT* DO
+    It stopped at issuing. No verify/parse, no email verification or password
+    reset (no provider chosen — same blocker as Task 03's photos), no rate
+    limiting (called out as a real production gap, §0/§8, not silently absent),
+    no DTOs, no resources, no mapper, no CDI, no tests. The rate-limiting note
+    deserves emphasis: it is the first deferred item in this project that is a
+    live vulnerability rather than missing functionality, and the task marks it
+    as such instead of burying it.
+
+ --------------------------------------------------------------------------------
+  TASK 04 CONVENTIONS — AND WHERE EACH ONE CAME FROM
+ --------------------------------------------------------------------------------
+
+   Convention                        Origin            Why it exists
+   --------------------------------- ----------------- ---------------------------------
+   Passwords never compared          TASK-04 §3.1      string comparison of secrets
+   directly; always matches()                         is how timing leaks and
+                                                       plaintext handling creep in
+   Client sees raw token, DB only   Task 01           RefreshToken.tokenHash was
+   its SHA-256 hash (split           tokenHash design  built for exactly this split;
+   knowledge)                        + §3.2            a table leak must yield zero
+                                                       usable sessions
+   Refresh = rotation in one tx,    §3.3 + Task 03    bounds a leaked token's life
+   never reuse                       TransactionRunner to "until the holder's next
+                                                       refresh"; same-tx or the
+                                                       guarantee is hollow
+   Login: identical error for        §3.4              the endpoint must not leak
+   unknown email vs wrong                             which emails are registered
+   password
+   ADMIN cannot self-register,      §7 (service, not  privilege-escalation guard on
+   enforced in service               Bean Validation)  a public endpoint must not
+                                                       depend on a DTO annotation
+                                                       someone may forget
+   Everything through                Task 03 §3.2      the boundary already existed;
+   TransactionRunner                 via §3.5          auth just follows it
+   Stateless, `new` it, typed       Task 03 §3.3–3.4  no new service plumbing was
+   exceptions only                   via §3.5          needed — only security rules
+   register() returns User, no      §7 literal        flagged for confirmation (§10):
+   tokens                                             auto-login reshapes the future
+                                                       register DTO, settle before it
+
+ --------------------------------------------------------------------------------
+
+
+ 1) exception.UnauthorizedException  [exception/UnauthorizedException.java]
+    - public UnauthorizedException(String errorCode, String message) -> super(401, ...)
+    Same shape as Task 03's other three, same package. None of Listing's errors
+    needed a 401 (NOT_OWNER is 403, LISTING_NOT_FOUND is 404, the delete guard
+    is 409) — auth is the first thing that genuinely does: wrong credentials
+    and a bad refresh token are "you are not authenticated," not "you're
+    authenticated but not allowed."
+    Codes used: INVALID_CREDENTIALS, INVALID_REFRESH_TOKEN
+
+ 2) security.PasswordHasher  [security/PasswordHasher.java]
+    Purpose: The only place a raw password is ever touched — and even here it
+             is never stored, logged, or returned. char[]-based API so the raw
+             password doesn't linger as an immutable String.
+
+    - private static final int COST = 12  (2^12 rounds; revisit upward as hardware improves)
+    - public static String hash(String rawPassword)
+      BCrypt.withDefaults().hashToString(COST, rawPassword.toCharArray())
+    - public static boolean matches(String rawPassword, String hash)
+      BCrypt.verifyer().verify(rawPassword.toCharArray(), hash).verified
+    Known bcrypt trap (worth knowing, not a concern): the algorithm only looks
+    at the first 72 bytes — anything beyond is silently ignored in both hash
+    and verify. Only matters if register ever gets a max-length rule.
+
+ 3) security.RefreshTokenHasher  [security/RefreshTokenHasher.java]
+    Purpose: Raw token for the client, hash for the DB — the split Task 01
+             built RefreshToken.tokenHash for. If the table leaked, no row in
+             it is usable as a bearer token.
+
+    - private static final SecureRandom RANDOM = new SecureRandom()
+    - public static String generateRaw() — 64 SecureRandom bytes, base64url, no padding.
+      What goes to the client. Never stored as-is.
+    - public static String hash(String rawToken) — SHA-256, hex-encoded. What
+      RefreshToken.tokenHash actually stores. SHA-256-not-bcrypt on purpose:
+      bcrypt's slowness is the point for low-entropy human passwords; a refresh
+      token is already 64 unguessable bytes, so an adaptive hash buys nothing
+      and only costs CPU on every refresh/logout. (NoSuchAlgorithmException is
+      wrapped in IllegalStateException but can never fire — SHA-256 is mandatory
+      on every JVM per the JCA spec.)
+
+ 4) security.JwtService  [security/JwtService.java]
+    Purpose: Issues signed access tokens. Nothing parses one back yet — that
+             belongs to whatever resolves a bearer token into a User, which
+             doesn't exist until the Resource layer does (§8).
+
+    - private static final Duration ACCESS_TOKEN_TTL = Duration.ofMinutes(15)
+    - private static final SecretKey KEY = loadKey() — static-eager-init, same
+      shape as JpaUtil (Task 02): one key, loaded once at class-load. If
+      JWT_SECRET decodes to <32 bytes, Keys.hmacShaKeyFor throws WeakKeyException
+      immediately — loud failure at first touch, never a silently weak key.
+    - private static SecretKey loadKey() — Dotenv JWT_SECRET -> BASE64 decode ->
+      Keys.hmacShaKeyFor. Same Dotenv pattern JpaUtil uses.
+    - public static String issueAccessToken(User user)
+      sub = user id, claim "role" = role name, iat + 15-min exp,
+      .signWith(KEY).compact(). Single-arg signWith lets JJWT pick the strongest
+      HMAC the key qualifies for (HS512 for our 64-byte key) — hardcoding HS256
+      would throw away strength for nothing.
+      Deliberately minimal claims: the payload is base64, not encrypted — email,
+      name, phone stay out; a caller needing them looks up by the resolved id.
+
+ 5) service.AuthResult  [service/AuthResult.java]
+    - public record AuthResult(String accessToken, String refreshToken, User user)
+    The shape login and refresh both return. `user` is safe to read after the
+    transaction closes — User has no associations of its own (Task 01: zero
+    collections by design), so once one field is touched in-tx the row is loaded.
+
+ 6) service.AuthService  [service/AuthService.java]
+    Purpose: Business rules for the four §4 endpoints. Stateless, no fields,
+             constructed with `new` — follows Task 03 §3 conventions exactly.
+
+    - public User register(User newUser, String rawPassword)   — POST /auth/register
+      1. Role check BEFORE any transaction (plain field check on an in-memory
+         object — same reason ListingService.create checks isVerified() outside
+         one): HOST or VISITOR only, else ForbiddenException("INVALID_ROLE").
+         Rejecting ADMIN self-registration lives in the service on purpose —
+         it's a privilege-escalation guard on a public unauthenticated endpoint,
+         not a data-shape check, so it isn't left to a @Valid annotation someone
+         could forget later.
+      2. TransactionRunner.call: existsByEmail -> ConflictException
+         ("EMAIL_ALREADY_EXISTS") rather than catching a DB unique violation, so
+         the error is clean instead of a leaked SQL exception.
+      3. setPasswordHash(PasswordHasher.hash(rawPassword)); setVerified(false);
+         setBlocked(false); create. The caller passes a raw password in and a
+         persisted User out — the hash is the only password-derived thing that
+         ever reaches the database.
+      Returns just the created User — NO tokens. See the §10 flag below.
+
+    - public AuthResult login(String email, String rawPassword)  — POST /auth/login
+      TransactionRunner.call: findByEmail -> orElseThrow(Unauthorized,
+      "INVALID_CREDENTIALS"); PasswordHasher.matches else the SAME
+      Unauthorized/INVALID_CREDENTIALS (§3.4 — checked in this order so neither
+      branch leaks whether the email is registered); user.isBlocked ->
+      ForbiddenException("ACCOUNT_BLOCKED"); issue access token + refresh token
+      (persisted hashed via issueRefreshToken); return AuthResult.
+      Note the ordering: blocked is checked AFTER credentials, so a blocked
+      account still can't be distinguished from a bad password without knowing
+      the right one.
+
+    - public AuthResult refresh(String rawRefreshToken)  — POST /auth/refresh
+      TransactionRunner.call: hash the presented token, findByTokenHash ->
+      orElseThrow(Unauthorized, "INVALID_REFRESH_TOKEN"); if expired, DELETE it
+      then throw Unauthorized/INVALID_REFRESH_TOKEN (an expired token is cleaned
+      up as it's rejected); else delete the presented token (rotation: single-use,
+      §3.3) and issue a fresh access + refresh pair. Delete + re-issue happen in
+      the SAME transaction — a crash between them can't leave both valid or
+      neither. A leaked token is only good until the holder's next refresh.
+
+    - public void logout(String rawRefreshToken)  — POST /auth/logout
+      TransactionRunner.execute: hash + deleteByTokenHash. Never throws — an
+      unknown or already-used token ends in the identical state (that token
+      doesn't work), so there's nothing worth reporting.
+
+    - private String issueRefreshToken(EntityManager em, User user)
+      generateRaw -> new RefreshToken(user, hash(raw), now+30d) -> create ->
+      return raw. TTL: 30 days.
+
+    Error codes emitted: INVALID_ROLE (403), EMAIL_ALREADY_EXISTS (409),
+    INVALID_CREDENTIALS (401), ACCOUNT_BLOCKED (403), INVALID_REFRESH_TOKEN (401).
+    Nothing else — no ad-hoc RuntimeException anywhere in the throw paths.
+
+ --------------------------------------------------------------------------------
+  CONVENTIONS — TASK 04 ADDS FOUR, INHERITS THE REST FROM TASK 03
+ --------------------------------------------------------------------------------
+   New (§3.1–3.4):
+   1) Passwords are never compared directly — always PasswordHasher.matches,
+      never .equals on a raw string or a hash.
+   2) Client sees the raw refresh token; the DB only ever sees its hash.
+      One-way SHA-256, no recovery operation exists by design.
+   3) Refresh is rotation, not reuse — presented token deleted + new one issued
+      in the same transaction. Single-use by construction.
+   4) Login never distinguishes "no such account" from "wrong password" —
+      identical INVALID_CREDENTIALS either way, so the endpoint doesn't leak
+      which emails are registered.
+   Inherited (Task 03 §3, §3.5): TransactionRunner for every method, stateless
+   service with repos built fresh in the lambda, typed-exception failures only.
+
+ --------------------------------------------------------------------------------
+  DESIGN PATTERNS USED IN TASK 04
+ --------------------------------------------------------------------------------
+   9) Token Rotation (refresh)
+      Definition: A credential is single-use — presenting it consumes it and
+      mints a successor in the same atomic step.
+      Applied: AuthService.refresh deletes the presented RefreshToken row and
+               persists its replacement inside one TransactionRunner.call.
+      Why: Bounds the blast radius of a leaked token to "until the legitimate
+           holder's next refresh," with no revocation list to maintain.
+
+   10) Hash-Separation / Split Knowledge (refresh tokens)
+      Definition: The bearer value and the stored verifier are different
+      objects; the store alone is insufficient to impersonate.
+      Applied: Raw token (base64url, to the client) vs SHA-256 hex (in
+      RefreshToken.tokenHash). Same idea as password hashing, tuned
+      differently — fast hash because the input already has 512 bits of entropy.
+      Why: A read-only DB leak yields zero usable sessions.
+
+   11) Fail-Closed Static Initializer (JwtService.KEY)
+      Definition: Security-critical configuration is validated eagerly at
+      load time so misconfiguration is impossible to ship silently.
+      Applied: KEY is loaded once at class-load; a short/weak JWT_SECRET throws
+               WeakKeyException on first touch instead of signing weak tokens.
+      Why: Mirrors JpaUtil's eager EMF build — the same "find out loudly at
+           startup, not quietly in production" philosophy Task 02 chose.
+
+   Patterns deliberately NOT introduced:
+    - Strategy/chain for credential checking (password vs token vs OAuth) —
+      two mechanisms, one class, no abstraction needed yet.
+    - Observer/event for "on login" side effects (last-login timestamp, audit
+      log) — no such column or table exists; not inventing one.
+
+ --------------------------------------------------------------------------------
+  DEFERRED (§8) — STILL NOT BUILT
+ --------------------------------------------------------------------------------
+   - JWT verification/parsing. JwtService issues; nothing parses back. Home is
+     whatever resolves a bearer token into a User — doesn't exist until the
+     Resource layer does. Adding verify/parse then is a small follow-up, not
+     speculative work now.
+   - Email verification (verify-email, resend-verification) and forgot/reset
+     password. Both need an email provider decision — same reason photo uploads
+     waited in Task 03. Note: register() sets verified=false unconditionally,
+     so today every self-registered host is unverified and ListingService.create
+     will reject their listings with EMAIL_NOT_VERIFIED until the verify flow
+     exists. That is the intended interaction between the two tasks, not a bug —
+     but it means the verify-email endpoint is now the critical path to a
+     working host flow, not just nice-to-have.
+   - Rate limiting / brute-force protection on login. Explicit gap, not silent:
+     nothing slows repeated wrong-password attempts against a known email.
+   - Expired-refresh-token cleanup. deleteAllExpired() (Task 02) still isn't
+     called from anywhere; rows accumulate for users who log in repeatedly
+     without logging out. Fine at MVP scale; a scheduled job later if it matters.
+   - Also still deferred from earlier tasks, untouched by this one: DTOs, JAX-RS
+     resources, exception mapper, CDI, photo endpoints, tests, Booking/Message/
+     Report/User services, booking auto-reject, conversations query, page-size
+     clamping.
+
+ --------------------------------------------------------------------------------
+  VERIFICATION
+ --------------------------------------------------------------------------------
+   - 6 new files, no existing .java file modified — matches §2's manifest.
+   - pom.xml: exactly the 4 additions from §1.1 (bcrypt compile; jjwt-api
+     compile; jjwt-impl + jjwt-jackson runtime). .env: exactly the 1 addition
+     from §1.2 (JWT_SECRET, 64 CSPRNG bytes, base64). .env is gitignored, so the
+     secret is local-only and never committed.
+   - No domain/persistence/repository/persistence.xml change, no new change to
+     any Task 03 file.
+   - mvn -q -DskipTests compile -> BUILD SUCCESS.
+   - grep "getTransaction" service/ -> exactly 1 file, TransactionRunner.java.
+   - Every throw in AuthService is Forbidden/Conflict/Unauthorized (5x `throw new`
+     + 1x orElseThrow) — no ad-hoc RuntimeException.
+   - UnauthorizedException hardcodes 401, matching the Task 03 pattern.
+   - Nothing in security/ or service/ logs, returns, or otherwise exposes a raw
+     password — raw values exist only as method parameters into hash()/matches().
+   - §9.8 vs javax.crypto — READ THIS, IT IS A SPEC BUG, NOT A VIOLATION:
+     `grep -rn "javax\." .../security` returns ONE hit, `import
+     javax.crypto.SecretKey` in JwtService.java. That import is IN THE TASK'S
+     OWN §5.3 VERBATIM CODE and cannot be removed: javax.crypto is JDK-standard
+     JCE (there is no jakarta.crypto — unlike persistence/validation, crypto was
+     never renamed), JJWT 0.13's Keys.hmacShaKeyFor returns exactly that type,
+     and the alternatives are fully-qualified use (same grep hit) or declaring
+     the key as java.security.Key (deviating from the spec to game its own
+     check). Kept spec-verbatim. The check's evident intent — no legacy
+     javax.* *Jakarta EE* imports, consistent with Tasks 01–03 — is satisfied:
+     there are no javax.persistence/validation/annotation imports anywhere new.
+
+   Manual smoke (needs DB up; same TransactionRunner idiom as before):
+     AuthService auth = new AuthService();
+     User u = new User(); u.setEmail("h@x.com"); u.setFullName("H");
+     u.setRole(UserRole.HOST);
+     User saved = auth.register(u, "s3cret-password");   // verified=false
+     AuthResult login = auth.login("h@x.com", "s3cret-password");
+     AuthResult r2 = auth.refresh(login.refreshToken()); // old token now dead
+     auth.logout(r2.refreshToken());                     // idempotent, no throw
+     auth.refresh(login.refreshToken());                 // throws INVALID_REFRESH_TOKEN
+   NOT BUILT: no such script was added — §0 excludes tests. Same offer as Task 03.
+
+ --------------------------------------------------------------------------------
+  AMBIGUITIES FOUND IN API-Specification.md §4 AND HOW THEY WERE RESOLVED
+ --------------------------------------------------------------------------------
+   (Note: API-Specification.md itself is not in the repo — these are read off the
+    §4 behaviour implied by TASK-04-auth.md, so treat as "worth confirming".)
+
+   1. Should register() auto-login (return tokens) or require a separate login?
+      Resolution: followed TASK-04 §7 literally — returns just the User. This is
+      the §10-flagged item: it changes the eventual register response DTO, so
+      confirm against the spec before the Resource layer lands. One-line change
+      here either way (call issueRefreshToken + issueAccessToken and return
+      AuthResult instead of User).
+   2. §4-implied: is there a max password length? bcrypt silently ignores input
+      past 72 bytes. Resolution: no length rule added — realistic passwords never
+      reach it, and inventing a validation rule here would duplicate the @Valid
+      boundary's future job. Flagged for whenever register gets its DTO.
+   3. What should refresh() do with an expired token — reject-and-keep or
+      reject-and-delete? Resolution: delete-then-reject in the same transaction.
+      Keeps the table self-cleaning for the common path and matches the "single
+      use" mental model; the scheduled deleteAllExpired job still covers tokens
+      nobody ever presents again.
+   4. Should logout of an unknown token be an error? Resolution: no — idempotent
+      success. The end state is identical either way, and erroring would let a
+      caller probe which token hashes exist.
+
+ --------------------------------------------------------------------------------
+  REPORT BACK (per TASK-04 §10)
+ --------------------------------------------------------------------------------
+   1. Files: exception/UnauthorizedException.java, security/{PasswordHasher,
+      JwtService, RefreshTokenHasher}.java, service/{AuthResult, AuthService}.java.
+      pom.xml: +4 dependencies exactly as §1.1. .env: +JWT_SECRET exactly as §1.2
+      (gitignored, local-only).
+   2. FLAG FOR CONFIRMATION: register returns just the created User — no
+      access/refresh tokens, so a client must call login separately afterward.
+      Implemented literally per §7, but if the spec actually wants auto-login on
+      register, say so: it's a one-line change here (build the AuthResult the way
+      login does) but it changes what the eventual Resource layer's register
+      response DTO looks like, so cheaper to settle now than after DTOs exist.
+   3. §8's four deferred items are all still deferred, each still blocked on the
+      same missing prerequisite: JWT verification (needs the Resource layer's
+      token-resolution home), email verification + password reset (needs an email
+      provider decision), rate limiting (needs a filter/interceptor home — same
+      layer as JWT verification), expired-token cleanup (needs a scheduler).
+      Nothing from §0 leaked in — no verify/parse method, no email flows, no
+      DTOs, no JAX-RS, no CDI, no rate limiting, no tests.
+   4. Ambiguities: see the four items above; all resolved literally per §7 with
+      the reasoning recorded, none silently changed.
+
+  Suggested commit:
+   feat: add Auth service (register, login, refresh, logout)
+
+   PasswordHasher (bcrypt), JwtService (HS-signed access tokens,
+   issuing only), RefreshTokenHasher (SHA-256, raw token never stored)
+   under com.backend.security. AuthService covers the four core auth
+   endpoints; refresh rotates tokens. UnauthorizedException (401) added
+   to the exception family — the first 401 this codebase has needed.
+   No JWT verification, no email flows, no rate limiting yet.
+================================================================================
