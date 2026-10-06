@@ -1411,3 +1411,427 @@
    to the exception family — the first 401 this codebase has needed.
    No JWT verification, no email flows, no rate limiting yet.
 ================================================================================
+
+
+================================================================================
+ TASK 05 — JAX-RS Bootstrap & Bearer-Token Authentication
+ DarCom Co-Hosting Platform (darcom-backend)
+ Stack: Java 21 · Jakarta EE 10 · Hibernate 6.4.4 · PostgreSQL
+        + Jersey 3.1.1 (jersey-container-servlet, jersey-hk2, jersey-media-json-jackson)
+================================================================================
+
+ Goal: The plumbing every future resource sits on. Until now the project had
+       JAX-RS annotations (from jakarta.jakartaee-api, provided scope) but no
+       JAX-RS *implementation* — on plain Tomcat, nothing could ever serve HTTP.
+       This task adds the engine (Jersey), the request pipeline (bootstrap,
+       bearer filter, SecurityContext, role wiring, error mappers), and the
+       missing token half (JwtService.verify), proven by a throwaway endpoint.
+       No real resources yet — plumbing first, endpoints after it is proven.
+
+ Deliverable: 6 new files, 1 method added to JwtService, 3 pom.xml
+              dependencies. No tests (§0). Two small deploy-driven deviations
+              from the task file's verbatim code (§10.4 below) — both required
+              for the deployment to actually work, both documented.
+
+ Files created (src/main/java/com/backend):
+   1. api/RestApplication.java                 Jersey bootstrap, @ApplicationPath("/api")
+   2. api/ApiExceptionMapper.java              ApiException -> §1 JSON error envelope
+   3. api/GenericExceptionMapper.java          everything else -> 500 envelope (+ fix, §10.4)
+   4. api/security/AuthenticationFilter.java   Bearer -> fresh User -> SecurityContext
+   5. api/security/UserSecurityContext.java    carries the User through the request
+   6. api/diagnostic/WhoAmIResource.java       throwaway proof endpoint (+ fix, §10.4)
+
+ File edited (1): security/JwtService.java
+   + verify(String token) -> UUID, + imports Claims, Jws, UUID.
+   KEY and issueAccessToken unchanged.
+
+ Files edited (infra): pom.xml only (+3 Jersey deps, §1). No persistence.xml
+ change (no new entities). No change to domain/persistence/repository/service.
+
+ New dependencies (pom.xml, all compile scope — plain Tomcat supplies none of this):
+   jersey-container-servlet 3.1.1 — the JAX-RS engine + ServletContainerInitializer
+     that auto-detects @ApplicationPath with zero web.xml (consistent with
+     failOnMissingWebXml=false: no web.xml was ever planned).
+   jersey-hk2 3.1.1 — DI inside Jersey (@Context injection). NOT jersey-cdi2-se:
+     that one boots its own Weld container with its own shutdown hook, a
+     documented source of shutdown conflicts on Tomcat.
+   jersey-media-json-jackson 3.1.1 — JSON (de)serialization, reusing the
+     jackson-databind already on the classpath (Maven mediates the transitive
+     version automatically; no conflict observed).
+
+ STARTING STATE (why this is a *re-implementation*):
+   The 6 api/ files already existed in the repo but the task was never applied:
+   pom.xml had no Jersey deps and JwtService had no verify() — compile was RED
+   with exactly the two blockers WhatToFix.txt names (Jersey classes unresolvable;
+   verify() unresolvable). The existing files were verified byte-for-byte against
+   TASK-05 §§5–8 and matched, so they were kept as-is; the missing pom + verify
+   halves were added. No deletion was needed. (WhatToFix.txt's "FIX FIRST" section
+   describes this exact state and is now resolved — compile is green.)
+
+ --------------------------------------------------------------------------------
+  CLASS / FUNCTION DEFINITIONS — TASK 05
+ --------------------------------------------------------------------------------
+
+ 1) api.RestApplication  [api/RestApplication.java]
+    Purpose: The single registration point for everything JAX-RS. Jersey's
+             ServletContainerInitializer finds it via @ApplicationPath("/api").
+
+    - @ApplicationPath("/api") public class RestApplication extends ResourceConfig
+    - Constructor registers exactly 5 classes: AuthenticationFilter,
+      ApiExceptionMapper, GenericExceptionMapper, RolesAllowedDynamicFeature,
+      WhoAmIResource. Explicit .register() calls, NOT package scanning — same
+      call Task 03 made for persistence.xml's <class> list: on a plain servlet
+      container, explicit beats discovery. Every future resource gets one line here.
+    - Jersey decision (§1, settling WhatToFix.txt's open question): Jersey
+      explicitly, not "pure Jakarta EE app-server managed" — there IS no app
+      server here, only Tomcat, so the EE-managed option would have meant no
+      JAX-RS at all. jersey-hk2 (not cdi2-se) per the Weld-shutdown rationale.
+
+ 2) api.ApiExceptionMapper  [api/ApiExceptionMapper.java]
+    - @Provider implements ExceptionMapper<ApiException>
+    - toResponse: ErrorEnvelope(now, status, errorCode, message, uriInfo.getPath())
+      -> Response.status(status).entity(body).type(JSON). The ONLY place that
+      knows how ApiException becomes JSON — filter-thrown and service-thrown
+      errors look identical on the wire (§3.4).
+    - public record ErrorEnvelope(timestamp, status, error, message, path) —
+      rebuilt from memory of spec §1 as read during Task 01 (see §10.2 flag).
+
+ 3) api.GenericExceptionMapper  [api/GenericExceptionMapper.java]
+    - @Provider implements ExceptionMapper<Throwable>
+    - toResponse: WebApplicationException -> return its own Response untouched
+      (DEPLOY FIX, §10.4); anything else -> log SEVERE with stack trace, return
+      500 INTERNAL_ERROR "Something went wrong". Stack goes to the server log,
+      client sees the generic message — never swapped.
+
+ 4) api.security.AuthenticationFilter  [api/security/AuthenticationFilter.java]
+    Purpose: Turns "a request with a header" into "a request with a User" —
+             the producer side Task 04 left unfinished, now given its home.
+
+    - @Provider @Priority(AUTHENTICATION) implements ContainerRequestFilter
+    - filter(): no/bad-prefix Authorization header -> return (unauthenticated,
+      §3.2 — public endpoints still work, @RolesAllowed rejects the rest later).
+    - JwtService.verify(token) -> userId; any JwtException -> Unauthorized
+      (INVALID_TOKEN, "invalid or expired"). No ExpiredJwtException special case
+      (§0: "refresh hint" shaping is a later product decision).
+    - TransactionRunner.call: findById, orElse(null); null OR blocked ->
+      Unauthorized (INVALID_TOKEN, "no longer valid"). Fresh lookup per request
+      (§3.1): verified/blocked are accurate as of THIS request, never stale
+      token claims. One extra query per authenticated request — the same
+      correctness-over-query-count tradeoff Tasks 03–04 already made.
+    - setSecurityContext(new UserSecurityContext(user, previous.isSecure())) —
+      reads HTTPS-ness from the container's context instead of hardcoding.
+    - Never builds a Response (§9.5) — only throws, so the mapper owns all JSON.
+
+ 5) api.security.UserSecurityContext  [api/security/UserSecurityContext.java]
+    - implements SecurityContext; getUser() returns the resolved User (one cast,
+      no second lookup — see §10.4 for how the cast survives Jersey).
+    - getUserPrincipal() -> principal named by user id; isUserInRole(role) ->
+      role-name equality — THE one line RolesAllowedDynamicFeature calls, i.e.
+      the entire bridge between @RolesAllowed("HOST") and the UserRole enum.
+    - isSecure() -> container value; getAuthenticationScheme() -> "Bearer".
+    - Deliberately a different package from com.backend.security (crypto
+      primitives): different layer, same name pattern, kept apart on purpose.
+
+ 6) api.diagnostic.WhoAmIResource  [api/diagnostic/WhoAmIResource.java]
+    - @Path("/_diag/whoami"): whoAmI() (no @RolesAllowed — the ONE endpoint
+      proving the unauthenticated path, §8) + hostOnly() (@RolesAllowed("HOST")).
+    - Takes @Context ContainerRequestContext and reads getSecurityContext() off
+      it (DEPLOY FIX, §10.4) instead of @Context SecurityContext directly.
+    - Response is a 3-field diagnostic record — explicitly NOT a DTO preview.
+    - Throwaway: delete com.backend.api.diagnostic once real protected endpoints
+      prove the same behavior (WhatToFix.txt rule 6 agrees).
+
+ 7) security.JwtService.verify  [companion addition, §4]
+    - public static UUID verify(String token): parser().verifyWith(KEY).build()
+      .parseSignedClaims(token) -> UUID(subject). Throws JwtException subtypes;
+      meaning-of-failure belongs to the caller (the filter), not here.
+    - The "small, natural follow-up" Task 04 §8 promised — now delivered, in the
+      home Task 04 said it was waiting for.
+
+ --------------------------------------------------------------------------------
+  PURPOSE — WHAT TASK 05 IS FOR, AND WHY IT FOLLOWS 01–04
+ --------------------------------------------------------------------------------
+
+  THE SHORT VERSION
+    Tasks 01–04 built a complete system with no door to knock on: entities,
+    queries, rules, and identity-minting — all reachable only from inside the
+    JVM. Task 05 builds the doorframe: the HTTP engine, the per-request
+    pipeline that turns a bearer token into the resolved User every service
+    method has been taking since Task 03, and the JSON error shape every
+    ApiException has been carrying since Task 03. First task whose deliverable
+    is verifiable only at runtime — which is why its Definition of Done demands
+    a deployment, not just a compile.
+
+  WHERE THE FIVE TASKS SIT NOW (spec §1: Resource -> Service -> Repository)
+    +------------------------------------------------------------------+
+    |  api/         <-- THIS TASK BUILDS IT (pipeline only, no real      |
+    |                 resources yet). Filter, context, mappers, roles,   |
+    |                 bootstrap + one throwaway diagnostic.              |
+    +------------------------------------------------------------------+
+    |  dto/         <-- STILL NOT BUILT (Task 06+)  request/response     |
+    |                 shapes, @Valid boundary.                          |
+    +------------------------------------------------------------------+
+    |  service/     <-- TASKS 03/04.  Untouched — and now CALLED FOR THE |
+    |                 FIRST TIME BY SOMETHING REAL: the filter uses      |
+    |                 TransactionRunner + UserRepository directly.       |
+    +------------------------------------------------------------------+
+    |  security/    <-- TASK 04 + verify() this task.  Issuing finally   |
+    |                 meets its reader: the filter.                     |
+    +------------------------------------------------------------------+
+    |  repository/  <-- TASKS 02/03.  Untouched — findById was already   |
+    |                 all the filter needed.                           |
+    +------------------------------------------------------------------+
+    |  domain/      <-- TASK 01.  Untouched.                            |
+    +------------------------------------------------------------------+
+
+  WHAT TASK 01 GAVE TASK 05
+    - User.isBlocked() — the filter's second rejection branch. A blocked user's
+      tokens die on next request without any revocation list, because the check
+      is a fresh lookup, not a claim.
+    - The LAZY-by-default entity shape, which is why §3.1's fresh-lookup design
+      is safe: the filter reads only id/role/verified/blocked (scalars), so the
+      User outlives the filter's transaction with nothing uninitialized.
+
+  WHAT TASK 02 GAVE TASK 05
+    - UserRepository.findById — the filter's entire DB access is one existing
+      method. Third task in a row needing zero new queries.
+    - The Dotenv + eager-init pattern JwtService already followed; the
+      WeakKeyException-at-first-touch behavior, which the deployment now
+      exercises for real (first authenticated request would fail loud, not
+      silent, on a bad secret).
+    - persistence.xml's explicit <class> list as precedent for RestApplication's
+      explicit .register() list — same philosophy, constructor instead of XML.
+
+  WHAT TASK 03 GAVE TASK 05
+    - TransactionRunner, used by the filter exactly the way a service uses it —
+      the filter is effectively a service caller that happens to run before the
+      resource method. getTransaction grep still returns only TransactionRunner.
+    - The ApiException family, which finally meets the mapper that reads
+      getStatus()/getErrorCode()/getMessage() verbatim — the passthrough design
+      from Task 03 works unchanged: no translation code was needed in the mapper.
+    - The "already-resolved User" contract (§3.1): this task is the thing that
+      produces that User from a header. Task 03 defined the consumer, Task 04
+      minted the credential, Task 05 closes the loop.
+
+  WHAT TASK 04 GAVE TASK 05
+    - issueAccessToken (unchanged) + the verify() home it predicted. The
+      sub=user-id, minimal-claims design is what makes the filter's
+      "token is only identity, User is the truth" rule possible.
+    - UnauthorizedException + INVALID_TOKEN — the filter's only failure mode,
+      already in the family, no new exception type needed.
+    - The 15-min access / 30-day rotating refresh split, which the endpoint
+      matrix relies on: short-lived bearer + long-lived rotation is exactly what
+      makes "reject present-but-bad, ignore missing" (§3.2) safe to enforce.
+
+  WHAT TASK 05 ADDS BACK TO THE PILE
+    - A working HTTP pipeline every Task 06+ resource registers into with one line.
+    - Enforceable @RolesAllowed — the annotation existed since Jakarta EE, but
+      did nothing without RolesAllowedDynamicFeature + isUserInRole.
+    - The error envelope on the wire — the first time an ApiException becomes
+      visible outside the JVM, in the exact shape Tasks 01–04 assumed.
+    - JwtService.verify — completing the token half Task 04 deferred.
+    - WhoAmIResource — the same-role-as-PersistenceSmokeCheck diagnostic, with
+      a deletion instruction attached (not a pet endpoint).
+
+  THE PROBLEM THIS TASK HAD TO SOLVE FIRST
+    WhatToFix.txt's runtime question: Jersey explicitly, or pure Jakarta EE
+    app-server managed? On Tomcat there is no EE-managed option — "pure Jakarta"
+    would mean hand-rolled servlet dispatch, i.e. re-implementing Jersey badly.
+    So Jersey 3.1.1 (Servlet 6 / Tomcat 10.1 compatible), hk2 flavor (no Weld
+    shutdown conflicts). Dependencies follow the decision, never precede it
+    (WhatToFix.txt rule 4).
+
+  WHAT THIS TASK DELIBERATELY DID *NOT* DO
+    No real resources (would mean debugging plumbing + endpoint at once), no DTOs
+    (the diagnostic record is not a preview), no ExpiredJwtException special
+    casing (product decision for resource builders), no logging framework
+    (java.util.logging, same as Hibernate's show_sql), no CDI, no tests.
+
+ --------------------------------------------------------------------------------
+  TASK 05 CONVENTIONS — AND WHERE EACH ONE CAME FROM
+ --------------------------------------------------------------------------------
+
+   Convention                        Origin            Why it exists
+   --------------------------------- ----------------- ---------------------------------
+   Filter resolves a FRESH User;     Task 04 minimal   token claims would go stale
+   token is identity only            claims + §3.1     (verified/blocked change);
+                                                       lookup-per-request favors
+                                                       correctness, as always
+   Present-but-bad token rejected;   §3.2              a failing authenticator must
+   missing token passes through                        not look anonymous — surfacing
+   unauthenticated                                     beats hiding
+   @RolesAllowed, not hand-written   §3.3              one wiring, every future
+   role ifs                                            resource just annotates
+   Errors throw, never build         §3.4 + Task 03    single mapper = single wire
+   Response (§9.5 enforced)          §3.4              shape for filter and service
+                                                       errors alike
+   Explicit .register(), no scan     Task 03 <class>   discovery is unreliable on
+                                     precedent + §7    plain servlet containers
+   api.security vs security split    §2                layer obvious from package
+   WebApplicationException passes    deploy fix §10.4  ExceptionMapper<Throwable>
+   through GenericExceptionMapper                      otherwise eats framework
+                                                       403s/404s -> 500s
+   Resource reads context via        deploy fix §10.4  Jersey wraps injected
+   request.getSecurityContext()                        SecurityContext; the raw
+                                                       instance is on the request
+
+ --------------------------------------------------------------------------------
+  DESIGN PATTERNS USED IN TASK 05
+ --------------------------------------------------------------------------------
+   12) Front Controller + Filter Chain (Jersey/servlet)
+      Definition: One entry point owns dispatch; orthogonal concerns attach as
+      ordered filters around the endpoint invocation.
+      Applied: RestApplication (front controller, @ApplicationPath) +
+               AuthenticationFilter at Priorities.AUTHENTICATION (chain link).
+               The priority is set correctly with one filter registered so the
+               second one never needs a retrofit.
+      Why: Auth becomes ambient — no resource method will ever parse a header.
+
+   13) Provider / ExceptionMapper (JAX-RS)
+      Definition: Failure rendering is registered capability, not call-site code.
+      Applied: ApiExceptionMapper (typed) + GenericExceptionMapper (catch-all);
+               JAX-RS picks most-specific, so ApiException never reaches the
+               generic one. Filter throws into the same pipeline (§3.4).
+      Why: One wire shape for every error, present and future, with zero
+           per-resource try/catch.
+
+   14) SecurityContext as Request-Scoped Identity Carrier
+      Definition: The container's own per-request slot carries caller identity
+      from authentication to authorization to the endpoint.
+      Applied: Filter sets UserSecurityContext; RolesAllowedDynamicFeature reads
+               isUserInRole; resource reads getUser(). Three consumers, one object,
+               standard interface — no project-global "current user" static.
+      Why: No statics, no thread-locals, no second lookup; the standard slot the
+           framework already passes everywhere.
+
+   Patterns deliberately NOT introduced:
+    - DTO/assembler for the diagnostic response — a 3-field record is not a layer.
+    - Custom authorization annotations — @RolesAllowed already exists; wrapping it
+      would be novelty for its own sake.
+    - A logging facade — one log statement doesn't justify one.
+
+ --------------------------------------------------------------------------------
+  DEFERRED (§8) — STILL NOT BUILT
+ --------------------------------------------------------------------------------
+   - Real resources (ListingResource, AuthResource, ...) — Task 06+.
+   - DTOs — Task 06+ (diagnostic record is not a preview).
+   - ExpiredJwtException-specific responses — product decision for resource builders.
+   - Logging framework — jul suffices for one statement.
+   - CDI, tests — unchanged.
+   - From earlier tasks, untouched: email verification + password reset (no
+     provider), login rate limiting (live gap, still marked), expired-token
+     cleanup (no scheduler), photo endpoints (no storage decision), Booking/
+     Message/Report/User services, booking auto-reject, conversations query,
+     page-size clamping.
+   - ADDED by this task's arrival: delete WhoAmIResource once real protected
+     endpoints prove the same behavior (its own javadoc + WhatToFix.txt rule 6).
+
+ --------------------------------------------------------------------------------
+  VERIFICATION
+ --------------------------------------------------------------------------------
+   Static (§9.1–§9.6):
+   - 6 files at §2 paths (pre-existing, verified against §§5–8 verbatim — kept).
+     JwtService diff: exactly +3 imports, +verify() — KEY/issueAccessToken byte-identical.
+   - pom.xml: exactly the 3 Jersey additions from §1. No persistence.xml change.
+   - mvn -q -DskipTests compile -> BUILD SUCCESS (was red before: Jersey
+     unresolvable + verify() missing — the WhatToFix.txt blockers, now gone).
+   - grep "javax\." api/ -> 0 hits. grep "Response\." AuthenticationFilter -> 0 hits.
+   - RestApplication registers exactly the 5 §7 classes.
+   - getTransaction still only in TransactionRunner (filter goes through it).
+
+   Live (§9.7 + §10, isolated Tomcat 10.1.60 base on port 8081, ROOT.war, Postgres
+   local — the project's own Tomcat install untouched, Eclipse 8080 setup untouched):
+   - 0. GET /api/_diag/whoami, no header -> 200 {"authenticated":false,...} (§9.7 PASS —
+     Jersey auto-detected @ApplicationPath with zero web.xml, as §1 predicted).
+   - 1. Same + valid HOST bearer -> 200 {"authenticated":true, correct id, "HOST"}.
+   - 2. GET /api/_diag/whoami/host-only + HOST bearer -> 200.
+   - 3. Same + VISITOR bearer -> 403 (§10 PASS — RolesAllowedDynamicFeature rejects).
+   - 4. Garbage bearer -> 401 {"status":401,"error":"INVALID_TOKEN",...} envelope (§10 PASS).
+   - Token minting: throwaway MintTokens script in temp (register HOST + VISITOR,
+     login, print tokens — same shape as PersistenceSmokeCheck, NOT in repo per §0).
+   - Ordering constraint discovered: persistence.xml is drop-and-create, so the
+     server-side EMF must initialize BEFORE rows exist — the script presents a
+     validly-signed nonexistent-user token first (401, harmless), THEN registers.
+     Reversing the order wipes the users on the server's first EMF init.
+   - NO web.xml was needed; NO HK2/Jackson conflict (Maven mediated to
+     jackson-databind 2.18.5, Jersey 3.1.1 happy); Dotenv found WEB-INF/classes/.env
+     via its classpath fallback (proven: JwtService loaded JWT_SECRET in-container).
+
+ --------------------------------------------------------------------------------
+  DEPLOY DEVIATIONS (§10.4) — WHAT DIDN'T MATCH THE TASK FILE'S ASSUMPTIONS
+ --------------------------------------------------------------------------------
+   Two, both required, both minimal, both compile-clean against §9:
+
+   D1. WhoAmIResource injection point (§8 verbatim doesn't work on Jersey).
+       Symptom: ClassCastException — SecurityContextInjectee cannot be cast to
+       UserSecurityContext; every authenticated call -> 500 via GenericExceptionMapper.
+       Cause: Jersey wraps an @Context-injected SecurityContext in its own delegate;
+       the "one cast" from §5.2's javadoc only holds for the instance the filter
+       set. Fix: resource takes @Context ContainerRequestContext and calls
+       getSecurityContext() (portable JAX-RS API, returns the raw instance) —
+       same one-cast contract, no Jersey-internal dependency. Diagnostic-only file;
+       production classes untouched by this. Documented in the file's javadoc.
+
+   D2. GenericExceptionMapper ate framework statuses (§6 verbatim incomplete).
+       Symptom: VISITOR on host-only -> 500, not the task's own "403 if VISITOR".
+       Cause: a registered ExceptionMapper<Throwable> outranks Jersey's default
+       handling, so RolesAllowed's ForbiddenException (which carries its own 403
+       Response) was flattened to 500. Fix: `if (exception instanceof
+       WebApplicationException) return exception.getResponse();` first — 4 lines,
+       framework statuses pass through, truly-unexpected still becomes 500.
+       Same fix also preserves future 404s. Noted in the file's javadoc.
+
+   Consequence to record: the 403 body is Tomcat/Jersey's default HTML error
+   page, NOT the JSON envelope — status is correct per §10, shape is not the
+   envelope. Giving 403s the envelope would need an ExceptionMapper<Forbidden-
+   Exception> with an invented error code — that is the "finer-grained response"
+   product decision §0 defers, so it stays deferred. Flagged, not snuck in.
+
+ --------------------------------------------------------------------------------
+  AMBIGUITIES & FLAGS (per §10.2–§10.4)
+ --------------------------------------------------------------------------------
+   1. [§10.2 FLAG] ErrorEnvelope shape (timestamp, status, error, message, path)
+      is rebuilt from memory of spec §1 as read during Task 01 — NOT re-read for
+      this task (the task file says so itself). Check field names / presence of
+      `path` against the actual API-Specification.md before Task 06 locks
+      response DTOs around it. Cheapest to settle now, expensive after DTOs exist.
+   2. Register-auto-login (Task 04 flag) is still open and now blocks a Task 06
+      DTO shape — same note as Task 04's report, repeated because the consumer
+      (AuthResource) is one task away.
+   3. No deploy assumption from §1 broke except D1/D2 above: no web.xml needed,
+      stock port scheme worked (8081 on the isolated base), no HK2 conflict.
+
+ --------------------------------------------------------------------------------
+  REPORT BACK (per TASK-05 §10)
+ --------------------------------------------------------------------------------
+   1. Files: api/{RestApplication, ApiExceptionMapper, GenericExceptionMapper}.java,
+      api/security/{AuthenticationFilter, UserSecurityContext}.java,
+      api/diagnostic/WhoAmIResource.java (all pre-existing, verified verbatim
+      against §§5–8). JwtService gains verify() + 3 imports; issueAccessToken/KEY
+      unchanged. pom.xml gains exactly the 3 Jersey 3.1.1 deps.
+   2. ENVELOPE FLAG: ErrorEnvelope is from memory of spec §1, not a fresh read —
+      confirm (timestamp, status, error, message, path) against the real file
+      before Task 06. See ambiguity 1.
+   3. DEPLOYED AND EXERCISED, not just compiled: full 5-check matrix above, all
+      green (200/false, 200/HOST, 200/host-only, 403/VISITOR, 401/garbage).
+      Jersey auto-registration, HK2, filter firing, role rejection, both mappers
+      all proven live. The throwaway MintTokens script stays in temp, out of the repo.
+   4. Deploy notes: nothing beyond D1/D2 — no web.xml, no port/context changes
+      needed (isolated base used 8081/ROOT.war; project Tomcat + Eclipse setup
+      untouched), no HK2/Jackson conflict, Dotenv classpath fallback confirmed
+      in-container, drop-and-create ordering constraint documented for future
+      test scripts.
+
+  Suggested commit:
+   feat: add JAX-RS bootstrap and bearer-token authentication
+
+   Jersey 3.1.1 is the project's first real JAX-RS implementation —
+   jakarta.jakartaee-api only ever gave compile-time annotations.
+   AuthenticationFilter resolves a bearer token to a fresh User per
+   request (never trusts token claims beyond identity); RolesAllowed-
+   DynamicFeature makes @RolesAllowed enforceable. ApiExceptionMapper/
+   GenericExceptionMapper give every error, service-thrown or
+   unexpected, the same JSON shape. WhoAmIResource is throwaway
+   verification, not a real endpoint — delete once confirmed working.
+   JwtService gains verify(); issueAccessToken is unchanged.
+================================================================================

@@ -408,6 +408,66 @@
    hosts — so verify-email is now the critical path to a working host flow.
   ================================================================================
 
+  ================================================================================
+   TASK 05 — JAX-RS Bootstrap & Bearer-Token Authentication
+   (Full detail in the root Task.txt — this file is the condensed mirror.)
+  ================================================================================
+   STARTING STATE: the 6 api/ files already existed but the task was never applied —
+     no Jersey in pom, no JwtService.verify → compile RED (the WhatToFix.txt blockers).
+     Existing files verified verbatim against the spec and kept; pom + verify added.
+
+   PURPOSE: Tasks 01–04 built a complete system with no door to knock on (JVM-only).
+     Task 05 builds the doorframe: HTTP engine (Jersey 3.1.1 — on Tomcat there is no
+     "pure Jakarta EE managed" option), per-request pipeline turning a bearer token
+     into the resolved User services have taken since Task 03, and the JSON error
+     shape ApiExceptions carried since Task 03. First task verifiable only at runtime.
+
+   Files created (6, pre-existing, kept verbatim):
+     api/RestApplication.java, api/ApiExceptionMapper.java, api/GenericExceptionMapper.java,
+     api/security/AuthenticationFilter.java, api/security/UserSecurityContext.java,
+     api/diagnostic/WhoAmIResource.java (throwaway — delete once real endpoints prove it).
+   Edited: security/JwtService.java (+verify +3 imports, rest identical);
+     pom.xml (+3 Jersey 3.1.1 deps: container-servlet, hk2 — not cdi2-se/Weld —,
+     media-json-jackson). No persistence.xml change; no domain/persistence/repository/service change.
+
+   RELATION TO 01–04: Task 01's isBlocked() is the filter's second rejection branch
+     (blocked tokens die without a revocation list); LAZY shape keeps the filter's
+     scalar-only reads safe. Task 02's findById is the filter's whole DB access
+     (third straight task needing zero new queries); Dotenv pattern already reused.
+     Task 03's TransactionRunner + exception family finally meet their runtime
+     consumers (filter calls through it; mapper reads status/error/message verbatim).
+     Task 04's minimal-claims token makes "token is identity only, User is truth"
+     possible; verify() is the follow-up Task 04 §8 promised. Cross-task proof:
+     register's verified=false meets create()'s guard with no glue.
+
+   Conventions: fresh User per request (never trust claims); present-but-bad rejected,
+     missing passes through; @RolesAllowed not hand-rolled ifs; errors throw (§9.5
+     clean); explicit .register() list (no scanning); WebApplicationException passes
+     through the generic mapper (deploy fix — else framework 403s become 500s);
+     resource reads context via request.getSecurityContext() (deploy fix — Jersey wraps
+     injected SecurityContext, verbatim §8 cast 500s otherwise).
+
+   Still deferred: real resources, DTOs, ExpiredJwtException shaping, logging facade,
+     CDI, tests — plus all earlier deferrals; ADDED: delete WhoAmIResource once real
+     protected endpoints prove the same.
+
+   Verification: compile GREEN (was red); javax 0 in api/; no Response. in filter;
+     5 registrations. LIVE on isolated Tomcat 10.1.60 :8081: unauth whoami 200/false
+     (§9.7); HOST whoami 200 + correct id/role; HOST host-only 200; VISITOR host-only
+     403; garbage token 401 INVALID_TOKEN envelope. No web.xml needed, no HK2/Jackson
+     conflict, Dotenv classpath fallback confirmed in-container. Ordering lesson:
+     drop-and-create means server EMF must init BEFORE test rows exist (probe-then-mint).
+     MintTokens script lives in temp, out of repo.
+
+   FLAGS: (1) ErrorEnvelope shape is from MEMORY of spec §1, not a fresh read —
+     confirm (timestamp,status,error,message,path) vs the real spec before Task 06
+     locks DTOs. (2) The 403 body is Jersey's default HTML page, NOT the envelope
+     (status correct per §10); enveloping 403s needs a ForbiddenException mapper +
+     an invented code — deferred as the §0 product decision. (3) Register-auto-login
+     still open, now one task away from its consumer DTO.
+  ================================================================================
+
+
 
 
 

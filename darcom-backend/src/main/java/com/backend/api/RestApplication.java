@@ -1,0 +1,21 @@
+package com.backend.api;
+
+import com.backend.api.diagnostic.WhoAmIResource;
+import com.backend.api.security.AuthenticationFilter;
+
+import org.glassfish.jersey.server.ResourceConfig;
+import org.glassfish.jersey.server.filter.RolesAllowedDynamicFeature;
+
+import jakarta.ws.rs.ApplicationPath;
+
+@ApplicationPath("/api")
+public class RestApplication extends ResourceConfig {
+
+    public RestApplication() {
+        register(AuthenticationFilter.class);
+        register(ApiExceptionMapper.class);
+        register(GenericExceptionMapper.class);
+        register(RolesAllowedDynamicFeature.class);
+        register(WhoAmIResource.class);
+    }
+}

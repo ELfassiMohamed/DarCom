@@ -2,6 +2,8 @@ package com.backend.security;
 
 import com.backend.domain.User;
 import io.github.cdimascio.dotenv.Dotenv;
+import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.Jws;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.io.Decoders;
 import io.jsonwebtoken.security.Keys;
@@ -9,6 +11,7 @@ import io.jsonwebtoken.security.Keys;
 import javax.crypto.SecretKey;
 import java.time.Duration;
 import java.util.Date;
+import java.util.UUID;
 
 public final class JwtService {
 
@@ -35,5 +38,20 @@ public final class JwtService {
                 .expiration(expiry)
                 .signWith(KEY)
                 .compact();
+    }
+
+    /**
+     * Parses and validates an access token, returning the user id it was issued
+     * for. Throws a JwtException subtype (ExpiredJwtException, SignatureException,
+     * MalformedJwtException, ...) for anything wrong with it — deciding what that
+     * means for the response is the caller's job (AuthenticationFilter, §5.1),
+     * not this method's.
+     */
+    public static UUID verify(String token) {
+        Jws<Claims> jws = Jwts.parser()
+                .verifyWith(KEY)
+                .build()
+                .parseSignedClaims(token);
+        return UUID.fromString(jws.getPayload().getSubject());
     }
 }
