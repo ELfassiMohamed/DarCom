@@ -2461,3 +2461,249 @@
    the service — entities still cross layers, DTOs still don't enter it.
    No new dependencies, no photo endpoints yet.
 ================================================================================
+
+
+================================================================================
+ TASK 08 — BookingService
+ DarCom Co-Hosting Platform (darcom-backend)
+ Stack: Java 21 · Jakarta EE 10 · Hibernate 6.4.4 · PostgreSQL · Jersey 3.1.1
+        + zero new dependencies (like Tasks 03 and 07)
+================================================================================
+
+ Goal: The service behind the spec's §7 booking endpoints — including the
+       auto-reject workflow deferred since Task 03. Takes the overlap *query*
+       Task 02 built and finally gives it a caller; exercises the
+       `canTransitionTo` machine Task 01 built with the service-side
+       authorization it was designed to be paired with.
+
+ Deliverable: 1 new file, 1 edited (6 additive changes), 0 new dependencies.
+              No DTOs/resource (next task — Auth/Listing split repeated).
+              No new exception type: 9 fresh codes on the 3 existing types.
+
+ Files created (1): service/BookingService.java
+   create / getById / findMine / findReceived / updateStatus / cancel
+
+ File edited (1): repository/BookingRepository.java (+50/−12)
+   4.1 findByVisitor +JOIN FETCH listing; 4.2 findByListingHost +JOIN FETCH
+   listing+visitor (to-one: pagination-safe, Task 07 §4 rule restated);
+   4.3 findOverlapping excludeBookingId nullable (null = create-time, value =
+   auto-reject; zero pre-existing callers, verified by grep); 4.4 new
+   findByIdWithDetails (no DISTINCT — to-one joins never duplicate);
+   4.5/4.6 countByVisitor + countByListingHost (countByHost-style gaps).
+   +1 import (Optional). existsActiveBookingForListing untouched.
+
+ No pom.xml / persistence.xml change. No domain/persistence/exception/security/
+ api/dto change. No other repository touched.
+
+ --------------------------------------------------------------------------------
+  CLASS / FUNCTION DEFINITIONS — TASK 08
+ --------------------------------------------------------------------------------
+
+ service.BookingService (stateless, `new`-constructed, TransactionRunner
+ throughout — Task 03 §3 conventions unchanged):
+
+ - create(visitor, listingId, checkIn, checkOut, guestsCount, message):
+   INVALID_DATE_RANGE up front on null/non-after checkout (pre-transaction,
+   register-role-check-shaped) — fulfills Booking's service-layer TODO, a
+   class-level rule Bean Validation can't express. Null dates / non-positive
+   guests need no line: JPA AUTO 400s them at persist via the mapper. Then:
+   LISTING_NOT_FOUND → LISTING_NOT_ACTIVE (non-ACTIVE) →
+   CANNOT_BOOK_OWN_LISTING (host==visitor id check) → DATES_UNAVAILABLE
+   (overlap vs CONFIRMED only — PENDING overlaps allowed, that's what
+   auto-reject is for) → persist PENDING → optional first Message
+   (visitor→host, same tx) → return booking. Plain findById suffices: em.find
+   loads the scalars any future DTO needs; host FK proxy is enough for the
+   checks and the message receiver.
+ - getById(currentUser, bookingId): WithDetails + three-way viewer check
+   (visitor id / listing-host id / ADMIN role) else NOT_AUTHORIZED. Id
+   comparisons never load beyond the fetched graph (§3.4 holds: host id rides
+   the lazy proxy safely).
+ - findMine / findReceived(host, status?, pageable): items + matching count →
+   PagedResult. Status filter mirrors the repo's nullable pattern.
+ - updateStatus(host, bookingId, newStatus): NOT_LISTING_HOST → narrow to
+   CONFIRMED/REJECTED (CANCELLED rejected BEFORE the machine — §3.1: passing
+   the machine ≠ authorized) → canTransitionTo → set+update → on CONFIRMED,
+   reject every other overlapping PENDING in the SAME tx (all-or-nothing with
+   the confirm). Returns the confirmed booking.
+ - cancel(visitor, bookingId): NOT_BOOKING_OWNER → machine→CANCELLED else
+   INVALID_STATUS_TRANSITION. Visitor-only; host path can't reach CANCELLED.
+
+ Error codes emitted: INVALID_DATE_RANGE, LISTING_NOT_FOUND (reused),
+ LISTING_NOT_ACTIVE, CANNOT_BOOK_OWN_LISTING, DATES_UNAVAILABLE,
+ BOOKING_NOT_FOUND, NOT_AUTHORIZED, NOT_LISTING_HOST (×2 paths: status + cancel
+ use their own), INVALID_STATUS_TRANSITION (×3 paths), NOT_BOOKING_OWNER.
+ Types: Conflict/NotFound/Forbidden only — the four-type family scales to a
+ third domain without growing (§3.3 confirmed live: no Unauthorized needed).
+
+ --------------------------------------------------------------------------------
+  PURPOSE — WHAT TASK 08 IS FOR, AND WHY IT FOLLOWS 01–07
+ --------------------------------------------------------------------------------
+
+  THE SHORT VERSION
+    Tasks 02–03 left a loaded gun on the table: an overlap query with no caller
+    and an auto-reject workflow explicitly deferred. Task 07 left a 409 branch
+    (`existsActiveBookingForListing`) with no HTTP-reachable way to trigger it.
+    Task 08 connects both ends — the first service whose core value is
+    orchestration across time (availability then, auto-reject later) rather
+    than single-row CRUD.
+
+  WHAT EACH PRIOR TASK GAVE (all used, none modified except the repo)
+    - 01: Booking entity (all setters consumed) + the state machine, finally
+      paired with its designed counterpart (service-side who-may-ask). The
+      entity TODO named this layer; this task fulfills it.
+    - 02: findOverlapping (both call shapes via the nullable widen), the four
+      list/count query skeletons (fetch + counts added, logic untouched),
+      half-open overlap semantics (turnover allowed, zero-night rejected).
+    - 03: TransactionRunner (rotation-grade atomicity for confirm+rejects),
+      the exception family (+codes only), the companion-edit precedent (§6),
+      the delete-guard this task's bookings now arm (both directions: the guard
+      blocks delete while active bookings exist; the service creates them).
+    - 04: pre-transaction field-check shape (role check → date check);
+      exception-code conventions. No auth code needed — callers pass Users.
+    - 05: filter already rejects blocked callers, so the service needs no
+      blocked-check (same reasoning as Task 07's resources).
+    - 06: ValidationExceptionMapper as the backstop making explicit null/guest
+      checks redundant (JPA AUTO → 400).
+    - 07: to-one-fetch pagination rule restated for Booking's two ManyToOnes;
+      countByHost-gap precedent cited twice; thin-service conventions.
+
+  WHAT TASK 08 ADDS BACK
+    - The deferred workflow, closed: confirm-time auto-reject in one tx.
+    - Six repo methods future BookingResource reads directly (fetch-joined
+      lists + WithDetails + counts — the next task needs zero repo work).
+    - Proof the exception family covers a third domain with codes alone.
+
+  PROBLEMS SOLVED FIRST
+    - Date validation placement: explicit service check ONLY where no other
+      layer can express it (range); nulls/negatives left to the deterministic
+      JPA-AUTO 400 path rather than duplicated. One rule, one home each.
+    - Nullable-exclude vs second method: one query, null-means-all — no
+      near-duplicate overlap method to drift apart.
+
+  DELIBERATELY NOT DONE: BookingResource/DTOs (next); notifications (email
+  provider); admin status override (flagged — §8.3: viewer ≠ mutator, mutator
+  needs a new method if spec wants it); pricing beyond nights×price (spec's
+  simple rule, no fees/deposits); tests; everything earlier still deferred.
+
+ --------------------------------------------------------------------------------
+  TASK 08 CONVENTIONS — AND WHERE EACH ONE CAME FROM
+ --------------------------------------------------------------------------------
+
+   Convention                        Origin            Why it exists
+   --------------------------------- ----------------- ---------------------------------
+   Machine says legal, service says  Task 01 §4.1      PENDING→CANCELLED passes the
+   who may ask (two checks, always)   boundary          machine but fails the role gate;
+                                                       either check alone under-
+                                                       authorizes
+   To-one fetch into paginated       Task 07 §4 +      can't duplicate rows (each
+   queries: yes (both sides)         Task 03 §6.1      Booking has exactly one each)
+   Counts pair every paginated list  Task 03           envelope needs totalItems;
+   (both booking lists)              countByHost gap   same miss, fixed the same way
+   Null-exclude widens, never forks  §4.3              two overlap call shapes, one
+   the overlap query                                   query, null = exclude nothing
+   Date-range checked pre-tx;        Booking TODO +    range inexpressible in BV;
+   nulls/negatives via JPA AUTO      Task 04 shape     the rest already 400s
+   No new exception type, ever       Task 03 family    9 codes on 3 types suffice;
+   (this task)                                         family scales by code
+
+ --------------------------------------------------------------------------------
+  DESIGN PATTERNS USED IN TASK 08
+ --------------------------------------------------------------------------------
+   20) Saga-Step Atomicity / All-or-Nothing Side Effects (auto-reject)
+      Definition: A primary state change and its triggered consequences commit
+      or roll back as one unit — no observable intermediate state.
+      Applied: confirm + N rejections inside a single TransactionRunner.call.
+      Why: A crash between confirm and rejects would leave overlapping PENDINGs
+           against a CONFIRMED booking — the exact inconsistency the workflow
+           exists to prevent.
+
+   21) Capability Narrowing Before Legality (updateStatus ordering)
+      Definition: Check whether the caller may request this *kind* of action
+      before checking whether the action is *valid* on the object.
+      Applied: CONFIRMED/REJECTED-only gate runs before canTransitionTo.
+      Why: Error precedence is information design — "not your action" must win
+           over "not a legal move," or callers learn machine details about
+           actions they can never perform.
+
+   Patterns deliberately NOT introduced:
+    - A booking-state observer/event for auto-reject — the loop is three lines
+      in the same transaction; an event bus would add failure modes to the one
+      place demanding atomicity.
+    - A separate availability service — one predicate call, not a layer.
+
+ --------------------------------------------------------------------------------
+  VERIFICATION
+ --------------------------------------------------------------------------------
+   Static (§7.1–§7.8 all green):
+   - 1 new + 1 edited (+50/−12, exactly the six §4 changes); no pom change;
+     compile green; getTransaction only TransactionRunner; throws only the 3
+     types (14 sites); narrowing-before-machine order confirmed by line reads;
+     auto-reject targets List.of(PENDING)→REJECTED; date check pre-tx.
+
+   Live — plain-Java BookingSmoke (temp, NOT repo §0): 28/28 ALL_GREEN.
+   (No HTTP: BookingResource is next task. Script drop+creates a clean slate;
+   idle Tomcat untouched.)
+   - create: zero-night/inverted/null dates → 409 INVALID_DATE_RANGE (×3);
+     own-listing 409; REMOVED-listing 409; happy PENDING + first Message row
+     verified via findThread; PENDING-overlap allowed; post-confirm overlap
+     409 DATES_UNAVAILABLE; turnover checkout==checkin allowed.
+   - updateStatus: CONFIRMED ok; overlapping PENDING auto-REJECTED (read back);
+     non-host 403; CANCELLED-target 409 pre-machine; double-confirm 409 machine.
+   - cancel: PENDING→CANCELLED; REJECTED-cancel 409; another visitor's 403.
+   - getById: visitor/host/admin ok; stranger 403 NOT_AUTHORIZED; unknown 404.
+   - findMine == 1 (+listing title readable post-tx: fetch-join proven);
+     findReceived all == 3; PENDING == 0; REJECTED == 1 (counts exact).
+
+   Harness notes: services read verified/role off the PASSED instance
+   pre-transaction — the script mirrors DB flips onto in-memory objects
+   (same lesson as Task 07's e2e, automated here); `Del`-style alias and
+   non-ASCII pitfalls avoided from prior sessions.
+
+ --------------------------------------------------------------------------------
+  AMBIGUITIES & FLAGS
+ --------------------------------------------------------------------------------
+   1. Admin mutator path (report §8.3): getById lets ADMIN view; NOTHING lets
+      admin change status. If spec §7 grants an override, it's a NEW method
+      (e.g. forceStatus with its own code), not a role added to updateStatus/
+      cancel — narrowing-before-machine must survive it.
+   2. PATCH .../cancel shape: implemented as the task's stated endpoint; no
+      spec file to confirm verb-vs-status-body conventions against.
+   3. Message-sending failures (e.g. blank-body edge): guarded by isBlank;
+      @NotBlank entity backstop exists. No partial-failure mode: message +
+      booking share the tx.
+   4. 409-with-active-bookings now HTTP-triggerable in principle (bookings
+      exist!), but still no BookingResource to drive it — Task 07's "service-
+      covered only" note upgrades to "creatable, not yet drivable."
+
+ --------------------------------------------------------------------------------
+  REPORT BACK (per TASK-08 §8)
+ --------------------------------------------------------------------------------
+   1. Files: service/BookingService.java (new, 6 methods); repo +6 changes
+      (2 to-one fetches, nullable exclude, WithDetails, 2 counts).
+   2. §6 deferred items still deferred: resource/DTOs (next), notifications
+      (email provider), plus the delete-guard coverage note (now armed: active
+      bookings are creatable as of this task).
+   3. FLAG: cancel visitor-only + updateStatus host-only, no admin override —
+      reasonable §7 reading (viewer ≠ mutator); override = new method, not a
+      widened check, if spec disagrees.
+   4. Spec §7: implemented literally per the task; no spec file in repo —
+      overlap/auto-reject wording taken on the task's word (half-open turnover
+      rule cross-checked against Task 02's repo javadoc, which matches).
+
+  Suggested commit:
+   feat: add BookingService — create, status transitions, auto-reject
+
+   The workflow deferred since Task 03: updateStatus runs the overlap
+   query (Task 02) and rejects every overlapping PENDING booking in the
+   same transaction as the confirm. Host is restricted to CONFIRMED/
+   REJECTED; CANCELLED is cancel()'s path, visitor-only — canTransitionTo
+   says what's legal, the service says who may ask for it (Task 01 §4.1's
+   original boundary, finally exercised). Six companion edits to
+   BookingRepository: listing/visitor fetch-joined into the two list
+   queries (safe under pagination — ManyToOne, not a collection),
+   findByIdWithDetails, two count methods, and a nullable excludeBookingId
+   so the same overlap query serves both create-time availability and
+   confirm-time auto-reject. No new exception type needed. create()
+   also enforces checkOut > checkIn up front (INVALID_DATE_RANGE) — the
+   class-level rule Bean Validation can't express, per Booking's TODO.
+================================================================================

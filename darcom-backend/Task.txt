@@ -551,6 +551,47 @@
      (6) Cosmetic: activities order not insertion-stable after DB reload (Set).
   ================================================================================
 
+  ================================================================================
+   TASK 08 — BookingService
+   (Full detail in the root Task.txt — this file is the condensed mirror.)
+  ================================================================================
+   PURPOSE: the service behind spec §7 — takes Task 02's callerless overlap query
+     and Task 01's unpaired state machine and gives both their designed counterpart:
+     availability checks + confirm-time auto-reject in one atomic tx. Also arms
+     Task 03's delete-guard with creatable active bookings.
+
+   Files created (1): service/BookingService.java
+     create (date-guard + guards + PENDING persist + optional first Message, same tx)
+     / getById (visitor/host/ADMIN viewer check) / findMine / findReceived
+     (status-optional, both with counts) / updateStatus (host-only CONFIRMED/
+     REJECTED + same-tx auto-reject of overlapping PENDING) / cancel
+     (visitor-only → CANCELLED).
+   Edited (1): repository/BookingRepository.java (+50/−12, exactly 6 §4 changes:
+     to-one fetches into both list queries; nullable excludeBookingId; new
+     findByIdWithDetails (no DISTINCT — to-one); countByVisitor +
+     countByListingHost; +Optional import). No pom change; nothing else touched.
+
+   Conventions: machine-says-legal + service-says-who (narrowing BEFORE machine);
+     to-one fetch paginated-safe (collections never); counts pair every list;
+     date-range pre-tx (INVALID_DATE_RANGE — fulfills Booking's TODO; nulls and
+     bad guests already 400 via JPA AUTO, not duplicated); 9 new codes on the 3
+     existing types — family scales without growing.
+
+   Verification: compile GREEN; §7 greps clean (throws only the 3 types; narrowing
+     order confirmed). LIVE plain-Java BookingSmoke (temp, NOT repo): 28/28 —
+     date-guard ×3, own/inactive guards, happy+message, PENDING-overlap allowed,
+     CONFIRMED-overlap 409, turnover allowed, confirm + auto-reject read-back,
+     non-host/narrowing/double-confirm, cancel ×3 branches, getById ×5 (incl.
+     ADMIN + stranger 403), findMine/findReceived + counts + status filter.
+
+   FLAGS: (1) Admin mutator path absent (viewer ≠ mutator) — override = new method
+     if spec wants it, never a widened check. (2) PATCH .../cancel shape per task
+     text, spec-unverifiable. (3) 409-branch now creatable but not yet drivable
+     (no resource). (4) Zero-night rejected but turnover allowed — exact boundary
+     documented in code.
+  ================================================================================
+
+
 
 
 
