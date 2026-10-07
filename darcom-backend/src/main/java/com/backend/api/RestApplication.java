@@ -18,5 +18,6 @@ public class RestApplication extends ResourceConfig {
         register(RolesAllowedDynamicFeature.class);
         register(JacksonConfig.class);
         register(AuthResource.class);
+        register(ListingResource.class);
     }
 }

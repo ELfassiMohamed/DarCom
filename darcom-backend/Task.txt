@@ -515,6 +515,43 @@
      (5) §0 malformed-JSON note updated: post-D2 symptom is Jersey-default 400, not 500.
   ================================================================================
 
+  ================================================================================
+   TASK 07 — Listing DTOs & ListingResource
+   (Full detail in the root Task.txt — this file is the condensed mirror.)
+  ================================================================================
+   PURPOSE: the HTTP boundary for Listings, copied from Task 06's template onto
+     Task 03's service. The real work is the lazy problem Task 06 never faced:
+     two companion edits (to-one JOIN FETCH in repo — pagination-safe; per-item
+     initialize of photos+activities in service — still entities, no DTOs in)
+     make list items JSON-safe past the closed transaction. 6 new files
+     (PagedResponse shared envelope + 4 listing DTOs + ListingResource), 3 edited
+     (RestApplication +1; repo +6/−2; service +15), 0 new dependencies.
+
+   SHAPE CHOICES: one full ListingResponse everywhere (host id+name only — no
+     UserResponse reuse, no contact leak); currency required (null would clobber
+     the "MAD" default → 500); pagination coerced+echoed-as-applied (no 400 type
+     exists; MAX 100 also bounds the init-loop N+1); HOST gates on 4 methods,
+     search/getById public; ADMIN can't list, anonymous→403 (mechanics, flagged).
+
+   Verification: compile GREEN (incl. fixing my own 4-arg-envelope inference bug
+     in task+code together); §9 greps clean. LIVE :8081 — register 201
+     (verified:false) → login → unverified create 403 envelope (guard first) →
+     psql flip (labeled scaffolding) → create 201 full body → search 1/1/1 +
+     getById same shape → VISITOR PUT 403 page vs non-owner HOST PUT 403 NOT_OWNER
+     envelope (both observed, told apart) → owner PUT 200 → DELETE 204 → search
+     empty (totalPages 0) → getById 200 REMOVED → mine shows REMOVED → missing
+     title 400 → size=1000 echoes 100, page=-1 echoes 0 → no-token POST 403.
+     First Listings traffic ever served.
+
+   FLAGS: (1) /mine-full-shape is the task's assumption, spec-unverifiable.
+     (2) Register-no-tokens + envelope shape further baked in — settlement urgent.
+     (3) REMOVED-readable observed live; owner-only rule still recommended.
+     (4) 409-booking branch service-only until BookingService (not faked).
+     (5) No sort param (unevidenced in-repo — refused speculative churn).
+     (6) Cosmetic: activities order not insertion-stable after DB reload (Set).
+  ================================================================================
+
+
 
 
 

@@ -2186,3 +2186,278 @@
    (+ deploy fix: JacksonConfig + jsr310 — Instant-bearing DTOs couldn't
    serialize without JavaTimeModule; 8th file, documented in Task.txt.)
 ================================================================================
+
+
+================================================================================
+ TASK 07 — Listing DTOs & ListingResource
+ DarCom Co-Hosting Platform (darcom-backend)
+ Stack: Java 21 · Jakarta EE 10 · Hibernate 6.4.4 · PostgreSQL · Jersey 3.1.1
+        + zero new dependencies (like Task 03 — everything already on classpath)
+================================================================================
+
+ Goal: The HTTP boundary for Listings — the second resource, built by copying
+       Task 06's DTO/resource template onto Task 03's service. The task's real
+       work is the lazy-loading problem Task 06 never faced (Auth's User has no
+       associations; Listing has three): two companion edits make list items
+       JSON-safe without letting DTOs into the service or fetch-joins into
+       paginated collection queries.
+
+ Deliverable: 6 new files, 3 edited, 0 deleted, 0 new pom.xml dependencies.
+              No tests (§0). No spec-shape deviation found during e2e worth a
+              deviation entry — one task-file bug (mine, 4-arg PagedResponse),
+              caught by javac, fixed in task + code together.
+
+ Files created (src/main/java/com/backend):
+   1. dto/PagedResponse.java             shared generic envelope; totalPages derived
+   2. dto/listing/ListingRequest.java    mutable bean, POST+PUT shared shape
+   3. dto/listing/ListingResponse.java   full record + from() (scalars+host+photos)
+   4. dto/listing/HostSummary.java       (id, fullName) — no contact data, ever
+   5. dto/listing/PhotoResponse.java     nested shape only, no photo endpoints
+   6. api/ListingResource.java           6 endpoints: 201/200×4/204
+
+ Files edited (3):
+   api/RestApplication.java              +1 line (register ListingResource)
+   repository/ListingRepository.java     +JOIN FETCH host (findByHost) + Criteria
+                                         fetch (search) + JoinType import (35→41: §4)
+   service/ListingService.java           +initializeListItems calls ×2 + helper (§5)
+
+ No pom.xml / persistence.xml change. No domain/persistence/exception/security
+ change. AuthService/JwtService/mappers/filter untouched.
+
+ --------------------------------------------------------------------------------
+  CLASS / FUNCTION DEFINITIONS — TASK 07
+ --------------------------------------------------------------------------------
+
+ 1) dto.PagedResponse  [dto/PagedResponse.java]
+    - public record PagedResponse<T>(items, page, size, totalItems, totalPages)
+      Compact ctor derives totalPages (ceil div, 0 when size/totalItems ≤ 0 —
+      the empty-search case divides nothing by zero); 4-arg overload delegates,
+      so totalPages is never suppliable. page/size echoed as APPLIED (coerced),
+      not as asked. Sits in dto/ root next to nothing yet — second shared
+      carrier after PagedResult, and the envelope-builder PagedResult waited for.
+
+ 2) dto.listing.ListingRequest  [mutable bean, POST+PUT shared]
+    title/city @NotBlank + @Size caps mirroring entity columns (255/120 — a
+    passing request is guaranteed to fit the column); description free;
+    address @Size(max=255) only (nullable in entity); pricePerNight @NotNull
+    @PositiveOrZero (mirrors entity exactly); currency @NotBlank @Size(3,3)
+    REQUIRED (§3.6: null would overwrite the entity's "MAD" default → 500);
+    mealsIncluded primitive (missing key = false); activities
+    Set<@Size(max=120) String> (element constraint mirrors the 120-col).
+    No host/status/id fields exist to accept — un-settable by construction.
+
+ 3) dto.listing.HostSummary + PhotoResponse  [records + from()]
+    HostSummary(id, fullName): the §6 host block, minimal — UserResponse reuse
+    rejected (email/phone/verified/blocked on a public endpoint). PhotoResponse
+    (id, url, sortOrder): nested only, order preserved from @OrderBy.
+
+ 4) dto.listing.ListingResponse  [record + from()]
+    Full §6 shape (14 fields). from() nests HostSummary.from + PhotoResponse
+    mapping, defensive-copies both collections (DTO mutation can't reach the
+    entity). Callable post-transaction ONLY under the §§4–5 contract.
+    ListingStatus serializes as name (same as UserRole already does).
+
+ 5) api.ListingResource  [@Path("/listings"), thin per §3.3]
+    - create: @RolesAllowed("HOST"), 201. toListing() builds the detached
+      carrier (all 8 editable fields, nothing else — PUT-status-change
+      impossible by absence). Service sets host+status.
+    - search: public, 200 envelope. Filters pass straight through (all optional).
+    - findMine: @RolesAllowed("HOST"), 200 envelope, all statuses.
+    - getById: public, 200. No status filter (Task-03 flag carried, unchanged).
+    - update: @RolesAllowed("HOST"), 200 same shape as GET (Task-03 reuse rule).
+    - delete: @RolesAllowed("HOST"), 204 no body.
+    - currentUser(): the D1 idiom (request-context getSecurityContext + cast),
+      one helper, four callers. normalizePageable(): coerce (page≥0, 1≤size≤100,
+      MAX_SIZE bounds the §5 N+1). toPagedResponse(): stream-map + 4-arg envelope.
+    - /mine-vs-/{id}: safe — literal beats template, and UUID-typed param can't
+      parse "mine" anyway (belt + suspenders, verified live: both resolve).
+
+ 6) Companion edits (§§4–5)
+    Repo: to-one fetch only (JPQL word + Criteria root.fetch INNER + import).
+    Safe: no row duplication (no DISTINCT needed), no in-memory-pagination
+    switch (collection-fetch-only hazard — the Task-03-§6.1 rule restated for
+    paginated queries). Counts + findByHostAndStatus untouched.
+    Service: initializeListItems(items) in search/findMine, in-lambda —
+    photos + activities (host already fetched). ≤2 SELECTs/item, ≤200 at the
+    clamp ceiling: stated, bounded, MVP-acceptable under the established
+    correctness-over-queries rule.
+
+ --------------------------------------------------------------------------------
+  PURPOSE — WHAT TASK 07 IS FOR, AND WHY IT FOLLOWS 01–06
+ --------------------------------------------------------------------------------
+
+  THE SHORT VERSION
+    Task 06 proved the DTO/resource template on the easy case (Auth: scalar-only
+    User, no lazy problem). Task 07 proves it on the hard case (Listing: three
+    lazy associations that must cross a closed transaction into JSON). The
+    template survives unchanged — the new knowledge is all in the two companion
+    edits and the rules constraining them (to-one fetch yes, collection fetch
+    never; init in service, map in resource).
+
+  WHAT EACH PRIOR TASK GAVE (concretely used, not credited in passing)
+    - 01: column lengths mirrored in @Size caps; "MAD" default creating the
+      currency-required rule; clear-then-addAll tolerating null activities;
+      @OrderBy preserved through mapping.
+    - 02: Pageable (validation reused by normalize pre-check... rather: Pageable
+      ctor still guards; resource coerces before constructing); findByHost/search
+      as the two query sites; fifth straight task needing zero new queries.
+    - 03: the service (signatures fit 1:1 — update's carrier convention gets its
+      first real JSON-built caller, works unchanged); the envelope both mappers
+      already shape; the REMOVED-visibility flag, observed live, still open.
+    - 04: verified-guard as the e2e's first assertion (guard branch before happy
+      path); INVALID_ROLE/NOT_OWNER semantics deferred to, not reimplemented.
+    - 05: D1 user-resolution idiom (the only correct cast, used 4×); framework vs
+      service 403 distinction (both observed live, told apart); RolesAllowed wiring.
+    - 06: the entire template (bean/record split, from() co-location, thin
+      resource, explicit statuses, shared envelope); JacksonConfig serializing
+      the first Instant-bearing response DTOs; ValidationExceptionMapper firing
+      on the first listing 400.
+
+  WHAT TASK 07 ADDS BACK
+    - PagedResponse: the shared envelope — Booking/Message/Admin lists inherit it.
+    - The lazy-contract pattern (fetch to-one at query, init collections in
+      service, map in resource) with its stated bound — the next entity with
+      associations copies the reasoning, not just the code.
+    - Proof that services survive real JSON-built carriers (detached Listing
+      from Jackson, not hand-built) with zero signature changes.
+
+  PROBLEMS SOLVED FIRST (both in-task, both documented, neither deferred)
+    - Post-transaction mapping 500s: designed out via §§4–5 before any endpoint
+      was hit (contrast D1–D3, found live). Prevention beats discovery.
+    - Unverified-host e2e block: psql flip prescribed as labeled scaffolding for
+      the still-missing verify-email endpoint (guard branch asserted FIRST, so
+      the scaffolding skips nothing unproven).
+
+  DELIBERATELY NOT DONE: photo endpoints (storage), 409-booking HTTP proof (no
+  BookingService — service-covered only, no repo-faked bookings), sort param
+  (unevidenced in-repo; no speculative signature churn), min>max 400 (honest
+  empty page), REMOVED-visibility change (flag carried), envelope confirmation
+  (now baked 5th place — urgent), 403-envelope/null-body/malformed-query edges
+  (observed mechanics, deferred pattern decisions), CDI/tests/others untouched.
+
+ --------------------------------------------------------------------------------
+  TASK 07 CONVENTIONS — AND WHERE EACH ONE CAME FROM
+ --------------------------------------------------------------------------------
+
+   Convention                        Origin            Why it exists
+   --------------------------------- ----------------- ---------------------------------
+   One full response shape; host     §3.2 + Task 03    list items CAN be loaded (§§4–5),
+   fetched, collections init'd      §§4–5             so thin summaries would hide data
+   rather than summary DTOs          vs alternative    for no runtime gain
+   To-one fetch into paginated       §4 + Task 03      safe (no dup rows, no memory
+   queries: yes; collection: never   §6.1              paging); the line is structural
+   Init in service, map in resource  §5 + Task 03 §8   service owns tx lifetime; DTOs
+                                                       never enter it
+   currency required, not defaulted  §3.6 + Task 01    null would clobber "MAD" →
+   at boundary                        default           persist-time 500
+   Coerce pagination, echo applied   §3.5 (no 400      no 400 type exists; 500 on a
+   values                              type exists)     public ?page=-1 unacceptable
+   HOST gates on 4 methods; search/  §3.3 + Task 05    role denial incl. anonymous→403
+   get public; ADMIN can't list       D2 mechanics      is correct mechanics, flagged
+                                                       product reading
+
+ --------------------------------------------------------------------------------
+  DESIGN PATTERNS USED IN TASK 07
+ --------------------------------------------------------------------------------
+   18) Eager-Boundary Initialization (companion §§4–5)
+      Definition: Associations needed past a boundary are loaded before crossing
+      it, each by the mechanism the query shape allows.
+      Applied: to-one via query fetch (pagination-safe) + to-many via explicit
+               initialize loop (in-tx) → DTO mapping reads freely post-tx.
+      Why: Keeps entities (not DTOs) crossing the service boundary while making
+           post-tx reads total — the alternative is either lazy 500s or DTOs in
+           the service, both rejected.
+
+   19) Un-settable by Absence (toListing, §7)
+      Definition: Instead of validating-away forbidden fields, the type cannot
+      carry them.
+      Applied: No host/status/id on ListingRequest; update can't change status
+               because there is no field to put it in — enforced by absence, and
+               absence can't be forgotten like a check can.
+      Why: Same spirit as requireOwner-shared-once (Task 03): properties that
+           hold structurally beat properties that hold by vigilance.
+
+   Patterns deliberately NOT introduced:
+    - Summary/separate list DTO — would duplicate mapping surface to dodge a
+      loading problem this task actually solved.
+    - A 400 type for pagination/filter contradictions — no family member exists,
+      and inventing one here would pre-empt a cross-cutting decision.
+    - Sort parameter — unevidenced in-repo; speculative signature churn refused.
+
+ --------------------------------------------------------------------------------
+  VERIFICATION
+ --------------------------------------------------------------------------------
+   Static (§9.1–§9.8 all green):
+   - 6 new files; 3 edited exactly as specified (RestApplication +1; repo +6/−2:
+     JPQL word, Criteria line, import; service +15: 2 calls + helper). No pom/
+     persistence change. Compile green (after fixing my own 4-arg envelope bug —
+     task + code corrected together).
+   - javax 0 (dto+api); request=class/responses=records; resource thin
+     (Pageable import only; no crypto/tx/repo/EM); HostSummary + ListingResponse
+     contact-field-free; getTransaction still TransactionRunner-only.
+
+   Live (§10.3, isolated Tomcat :8081, fresh slate — all green):
+   - register HOST 201 (verified:false asserted) → login 200
+   - create unverified → 403 EMAIL_NOT_VERIFIED envelope (guard FIRST)
+   - psql flip (labeled scaffolding) → create 201 full body (host id+name only,
+     photos:[], ACTIVE, ISO dates, activities present)
+   - search envelope 1/1/1 + getById same shape (lazy contract proven live)
+   - VISITOR PUT → 403 framework page; non-owner HOST PUT → 403 NOT_OWNER
+     envelope (both 403s observed, told apart — mechanics documented)
+   - owner PUT 200 (updatedAt now set) → DELETE 204 empty → search empty
+     (totalPages 0, no div-zero) → getById 200 REMOVED (Task-03 flag live)
+   - mine → 1 REMOVED item (all-statuses rule); missing title → 400 envelope;
+     size=1000 → echoed 100; page=-1 → echoed 0; no-token POST → 403 page
+   - Observed cosmetic: activities order not insertion-ordered after DB reload
+     (Set semantics — unordered by contract, not a defect).
+
+   Harness notes (test-side only, app untouched): PowerShell 5.1 mangles non-ASCII
+   JSON bodies (Latin-1 vs UTF-8 — use ASCII fixtures); `Del` collides with the
+   Remove-Item alias (renamed helper). The é-400 incidentally reconfirmed the
+   malformed-JSON → default-400-page mechanics.
+
+ --------------------------------------------------------------------------------
+  AMBIGUITIES & FLAGS
+ --------------------------------------------------------------------------------
+   1. Spec §6 shapes unverifiable (no spec file) — implemented literally per the
+      task's §6/§7 code. /mine shape (full, not summary) is the task's stated
+      assumption, flagged in-task.
+   2. Register-no-tokens now one task further baked in (201 user-only consumed
+      by this e2e's login step). Auto-login settlement more urgent, not less.
+   3. Envelope shape baked 5th place (PagedResponse joins). Confirmation ideal
+      before Booking lists copy it.
+   4. REMOVED-readable-by-id observed live (200, public). Owner-only rule still
+      the recommended resolution — needs a decision before real clients
+      bookmark dead listings.
+   5. 409-with-active-bookings: service branch exists, no HTTP path to trigger
+      it until BookingService lands. Not provable, not faked — stated.
+
+ --------------------------------------------------------------------------------
+  REPORT BACK (per TASK-07 §10)
+ --------------------------------------------------------------------------------
+   1. Files: dto/{PagedResponse, listing×4}.java; api/ListingResource.java.
+      Edits: RestApplication +1; repo to-one fetches; service init loops —
+      unavoidable (post-tx mapping 500s without them), minimal (20+/−2 lines),
+      layering intact (entities cross, DTOs don't enter).
+   2. SERVICE FIT: clean — all six signatures fit 1:1. update's carrier convention
+      survives real JSON-built carriers (Jackson Listing → service copies 8 fields).
+      No workaround anywhere; "flag, don't work around" untriggered.
+   3. E2E: full §10.3 matrix above + extras (both-403 contrast, clamp/coerce echoes,
+      mine-after-delete, REMOVED-read). First Listings traffic ever served.
+   4. Spec §6: implemented literally; residual risks are flags 1–5 above.
+
+  Suggested commit:
+   feat: add Listing DTOs and ListingResource
+
+   Request bean with boundary validation (@Size caps mirror entity
+   columns; currency required so null can't overwrite the MAD default);
+   response records with from() factories — HostSummary is id+fullName
+   only, no contact data on public endpoints. PagedResponse is the
+   shared generic pagination envelope with totalPages computed once.
+   ListingResource is thin: role gates + mapping + statuses, all rules
+   in the unchanged-method-shape ListingService. Two companion edits
+   make lazy associations JSON-safe: JOIN FETCH host (to-one, pagination
+   -safe) in the repository, per-item initialize of photos+activities in
+   the service — entities still cross layers, DTOs still don't enter it.
+   No new dependencies, no photo endpoints yet.
+================================================================================

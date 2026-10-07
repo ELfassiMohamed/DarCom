@@ -6,6 +6,7 @@ import com.backend.domain.enums.ListingStatus;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.criteria.CriteriaBuilder;
 import jakarta.persistence.criteria.CriteriaQuery;
+import jakarta.persistence.criteria.JoinType;
 import jakarta.persistence.criteria.Predicate;
 import jakarta.persistence.criteria.Root;
 
@@ -21,10 +22,10 @@ public class ListingRepository extends GenericRepository<Listing> {
         super(em, Listing.class);
     }
 
-    /** GET /listings/mine — every status; the host sees their HIDDEN/REMOVED ones too. */
+    /** GET /listings/mine — every status; the host sees their HIDDEN/REMOVED ones too. host is fetch-joined (to-one: pagination-safe, no row duplication) so list items leave the service with a readable host (TASK-07 §4). */
     public List<Listing> findByHost(User host, Pageable pageable) {
         return em.createQuery(
-                "SELECT l FROM Listing l WHERE l.host = :host ORDER BY l.createdAt DESC",
+                "SELECT l FROM Listing l JOIN FETCH l.host WHERE l.host = :host ORDER BY l.createdAt DESC",
                 Listing.class)
                 .setParameter("host", host)
                 .setFirstResult(pageable.offset())
@@ -85,6 +86,7 @@ public class ListingRepository extends GenericRepository<Listing> {
         CriteriaBuilder cb = em.getCriteriaBuilder();
         CriteriaQuery<Listing> cq = cb.createQuery(Listing.class);
         Root<Listing> root = cq.from(Listing.class);
+        root.fetch("host", JoinType.INNER); // to-one fetch: pagination-safe (TASK-07 §4); collections stay out (bag-fetch hazard)
 
         cq.select(root).where(searchPredicates(cb, root, city, minPrice, maxPrice, mealsIncluded));
         cq.orderBy(cb.desc(root.get("createdAt")));

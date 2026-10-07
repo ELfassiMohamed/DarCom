@@ -45,6 +45,7 @@ public class ListingService {
             ListingRepository repo = new ListingRepository(em);
             List<Listing> items = repo.search(city, minPrice, maxPrice, mealsIncluded, pageable);
             long totalItems = repo.countSearch(city, minPrice, maxPrice, mealsIncluded);
+            initializeListItems(items);
             return new PagedResult<>(items, totalItems);
         });
     }
@@ -55,6 +56,7 @@ public class ListingService {
             ListingRepository repo = new ListingRepository(em);
             List<Listing> items = repo.findByHost(host, pageable);
             long totalItems = repo.countByHost(host);
+            initializeListItems(items);
             return new PagedResult<>(items, totalItems);
         });
     }
@@ -103,6 +105,19 @@ public class ListingService {
     private void requireOwner(Listing listing, User host) {
         if (!listing.getHost().getId().equals(host.getId())) {
             throw new ForbiddenException("NOT_OWNER", "You do not own this listing");
+        }
+    }
+
+    /**
+     * Makes list items safe to map to DTOs after the transaction closes (TASK-07 §5).
+     * host arrives already fetched via the §4 query; photos + activities (both
+     * collections — never fetch-joined into paginated queries) are initialized
+     * here, up to 2 extra SELECTs per item, bounded by the resource's MAX_SIZE.
+     */
+    private void initializeListItems(List<Listing> items) {
+        for (Listing item : items) {
+            Hibernate.initialize(item.getPhotos());
+            Hibernate.initialize(item.getActivities());
         }
     }
 }
