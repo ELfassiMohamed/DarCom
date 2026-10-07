@@ -467,6 +467,55 @@
      still open, now one task away from its consumer DTO.
   ================================================================================
 
+  ================================================================================
+   TASK 06 — Auth DTOs, Bean Validation & AuthResource
+   (Full detail in the root Task.txt — this file is the condensed mirror.)
+  ================================================================================
+   PURPOSE: the last mile for Auth — the JSON-speaking boundary in front of
+     AuthService, and the DTO/resource template all future resources copy
+     (mutable validated request beans; record responses with from(); thin
+     resources; explicit statuses; one shared envelope).
+
+   Files created (8 = 7 manifest + 1 deploy fix):
+     dto/auth/RegisterRequest.java (@NotBlank/@Email/@Size(8,72)/@NotNull role only —
+       ADMIN passes @Valid, dies in service 403), LoginRequest.java (@NotBlank only,
+       no @Email so malformed email funnels to the same 401), RefreshTokenRequest.java,
+     UserResponse.java (record+from, NO passwordHash field — the field list IS the
+       mechanism), AuthResponse.java (record+from, composes UserResponse.from),
+     api/ValidationExceptionMapper.java (CVE → 400 VALIDATION_ERROR, reuses envelope),
+     api/AuthResource.java (POST register→201/login→200/refresh→200/logout→204,
+       thin: no crypto/tx/repo per §9.6),
+     api/JacksonConfig.java (DEPLOY FIX: JavaTimeModule + ISO dates — without it,
+       register persisted then failed its own 201 on Instant serialization).
+   Edited: RestApplication (+ValidationExceptionMapper, +JacksonConfig, +AuthResource).
+   Deleted: diagnostic/WhoAmIResource.java (after proving login-token→whoami interop).
+   pom: +hibernate-validator 8.0.5 +expressly 5.0.0 +jersey-bean-validation 3.1.1
+     (validation-api 3.0.2 already present, not duplicated) +jsr310 2.18.5 (deploy fix).
+   No AuthService/JwtService/exception change — fit was 1:1, no workaround (§10.2 clean).
+
+   RELATION TO 01–05: 01's annotations finally execute (entities now also validated on
+     persist via JPA AUTO — harmless); 02 serves all queries unchanged (4th task, zero
+     new queries); 03's envelope reused a 3rd time + thin-layer discipline; 04 called
+     with zero signature changes; 05's pipeline +1 mapper, WhoAmI as interop partner
+     then retired. Highest-leverage artifact: the copyable DTO/resource pattern.
+
+   Verification: compile GREEN (before + after deletion); javax 0 in dto/api/;
+     §9.6/§9.7 clean. LIVE :8081 — register 201 (ISO createdAt, no hash) → dup 409 →
+     missing/bad-email/short-pw 400s (proves OUR mapper beats Jersey's default AND
+     HV 8.0.5 works on validation-api 3.0.2 AND expressly renders) → ADMIN 403 from
+     service → login 200 + tokens → malformed-email login 401 (not 400) → login token
+     → whoami 200 true/HOST (05↔06 interop) → refresh 200 rotated, original 401 →
+     logout 204, post-logout refresh 401, re-logout 204. Post-deletion: register/login
+     green, whoami 404.
+
+   FLAGS: (1) Register-no-tokens now BAKED into the 201 body — last cheap moment to
+     settle auto-login before clients build on it. (2) Envelope shape still from memory,
+     now baked in a 3rd place — more urgent. (3) 403s still Jersey-default HTML, deferred.
+     (4) Null-body POST → NPE → 500 edge observed, left for next resource task to pattern.
+     (5) §0 malformed-JSON note updated: post-D2 symptom is Jersey-default 400, not 500.
+  ================================================================================
+
+
 
 
 

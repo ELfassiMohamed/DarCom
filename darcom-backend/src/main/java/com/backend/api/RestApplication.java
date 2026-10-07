@@ -1,6 +1,5 @@
 package com.backend.api;
 
-import com.backend.api.diagnostic.WhoAmIResource;
 import com.backend.api.security.AuthenticationFilter;
 
 import org.glassfish.jersey.server.ResourceConfig;
@@ -15,7 +14,9 @@ public class RestApplication extends ResourceConfig {
         register(AuthenticationFilter.class);
         register(ApiExceptionMapper.class);
         register(GenericExceptionMapper.class);
+        register(ValidationExceptionMapper.class);
         register(RolesAllowedDynamicFeature.class);
-        register(WhoAmIResource.class);
+        register(JacksonConfig.class);
+        register(AuthResource.class);
     }
 }

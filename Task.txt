@@ -1835,3 +1835,354 @@
    verification, not a real endpoint — delete once confirmed working.
    JwtService gains verify(); issueAccessToken is unchanged.
 ================================================================================
+
+
+================================================================================
+ TASK 06 — Auth DTOs, Bean Validation & AuthResource
+ DarCom Co-Hosting Platform (darcom-backend)
+ Stack: Java 21 · Jakarta EE 10 · Hibernate 6.4.4 · PostgreSQL · Jersey 3.1.1
+        + hibernate-validator 8.0.5.Final, expressly 5.0.0,
+          jersey-bean-validation 3.1.1, jackson-datatype-jsr310 2.18.5 (deploy fix)
+================================================================================
+
+ Goal: The first real, working endpoints. Until now every layer was proven
+       with throwaway scripts; this task puts the HTTP boundary in front of
+       AuthService — request DTOs in, response DTOs out, @Valid enforced at the
+       boundary — and establishes the DTO/resource pattern every future
+       resource copies. No service, crypto, or exception change: AuthService is
+       called exactly as Task 04 left it.
+
+ Deliverable: 8 new files (7 in the manifest + 1 deploy-driven), 1 edited,
+              1 deleted, 4 pom.xml dependencies (3 new + 1 pre-existing).
+              No tests (§0). One deploy-driven addition beyond the manifest
+              (JacksonConfig + jsr310) — without it no endpoint returning an
+              Instant can respond; documented below.
+
+ Files created (src/main/java/com/backend):
+   1. dto/auth/RegisterRequest.java      mutable bean, @NotBlank/@Email/@Size/@NotNull
+   2. dto/auth/LoginRequest.java         mutable bean, @NotBlank only (deliberate, §6)
+   3. dto/auth/RefreshTokenRequest.java  mutable bean, shared by refresh + logout
+   4. dto/auth/UserResponse.java         record + from(User) — no passwordHash field
+   5. dto/auth/AuthResponse.java         record + from(AuthResult)
+   6. api/ValidationExceptionMapper.java ConstraintViolationException -> 400 envelope
+   7. api/AuthResource.java              POST /api/auth/register|login|refresh|logout
+   8. api/JacksonConfig.java             ObjectMapper w/ JavaTimeModule, ISO dates (DEPLOY FIX)
+
+ Files edited (1): api/RestApplication.java
+   + register ValidationExceptionMapper, JacksonConfig, AuthResource;
+   - import + register WhoAmIResource (retired after the interop proof, §5).
+
+ Files deleted (1): api/diagnostic/WhoAmIResource.java (+ now-empty diagnostic/).
+ It proved Task 05's plumbing, then proved Task 05↔06 interop (login token ->
+ whoami 200), then went — exactly its documented lifecycle.
+
+ Files edited (infra): pom.xml (+3: hibernate-validator, expressly,
+ jersey-bean-validation; jakarta.validation-api 3.0.2 already present since
+ Task 01, NOT duplicated, per §1; +1 jsr310 deploy fix). No persistence.xml
+ change. No change to domain/persistence/repository/exception/security/service.
+
+ New dependencies:
+   hibernate-validator 8.0.5.Final — the actual BV implementation; without it
+     @NotBlank/@Email/@Size are inert annotations nothing reads.
+   expressly 5.0.0 — EL impl HV needs for {…} message interpolation (HV's own
+     documented recommendation).
+   jersey-bean-validation 3.1.1 — makes Jersey invoke @Valid; auto-discovered,
+     no .register() (the one exception to this project's explicit-registration
+     rule — justified: it's Jersey's own wiring, not ours).
+   jackson-datatype-jsr310 2.18.5 (DEPLOY FIX, beyond §1) — version-matched to
+     the existing jackson-databind; see deviation D3.
+
+ --------------------------------------------------------------------------------
+  CLASS / FUNCTION DEFINITIONS — TASK 06
+ --------------------------------------------------------------------------------
+
+ 1–3) dto.auth.{RegisterRequest, LoginRequest, RefreshTokenRequest}
+    Plain mutable beans: no-arg ctor, private fields, getters/setters — NOT
+    records (§3.1, §9.5). Records serialize fine outward but the Jersey +
+    Jackson-record + HV combination on *request* params is newer and less proven
+    than the decade-old mutable-bean path; for a @Valid that must never
+    silently not-fire, boring wins.
+    - RegisterRequest: email @NotBlank @Email; password @NotBlank @Size(8,72) —
+      max 72 is Task 04's bcrypt boundary, not arbitrary; min 8 is new here
+      (boundary-only, no service involvement). fullName @NotBlank; phone free;
+      role @NotNull ONLY — ADMIN passes @Valid and dies in the service's 403
+      (two-layer defense, Task 04 §7's note honored: the DTO never becomes the
+      sole privilege guard).
+    - LoginRequest: email/password @NotBlank, NO @Email — deliberate (§6): a
+      malformed email must funnel into the identical 401 with unknown-email and
+      wrong-password (Task 04 §3.4, one layer further out), never short-circuit
+      to a 400 that leaks "this input shape is the problem."
+    - RefreshTokenRequest: single @NotBlank refreshToken, shared by refresh/logout.
+
+ 4) dto.auth.UserResponse  [record + from(User)]
+    (id, email, fullName, phone, role, verified, blocked, createdAt). The
+    "never serialize an entity" rule (Task 03 §8) lands here: there is no
+    passwordHash field because from() only copies what's listed — the mechanism
+    IS the field list, no separate enforcement needed. createdAt stays Instant;
+    the wire format (ISO string) is JacksonConfig's job, not the DTO's.
+
+ 5) dto.auth.AuthResponse  [record + from(AuthResult)]
+    (accessToken, refreshToken, UserResponse). from() composes UserResponse.from —
+    nesting factories, not flattening. §3.2's co-located-factory pattern in both.
+
+ 6) api.AuthResource  [@Path("/auth")]
+    Thin by construction (§3.3): map DTO -> service input, call, map back. No
+    hash computed, no role checked, no TransactionRunner, no repository — §9.6
+    grep-clean. private final AuthService field (stateless service + per-request
+    resource lifecycle = essentially free; no @Singleton needed).
+    - register -> 201 + UserResponse (§3.4: explicit CREATED, not default 200).
+    - login/refresh -> 200 + AuthResponse. logout -> 204, no @Produces (no body
+      to describe). Every method returns Response, never a bare DTO (§3.4).
+
+ 7) api.ValidationExceptionMapper
+    Catches jakarta.validation.ConstraintViolationException (what Jersey's BV
+    module throws BEFORE a resource body runs — §4: no ValidationException type
+    exists because there is no code of ours in that path to throw one).
+    Joins violations as "path message; …" into the SHARED ErrorEnvelope with
+    400/VALIDATION_ERROR — one envelope definition, three mappers. Ours won over
+    jersey-bean-validation's built-in default mapper (proven live: the 400 body
+    is our envelope, not Jersey's ValidationErrorMessage shape — explicit
+    registration outranks auto-discovery).
+
+ 8) api.JacksonConfig  [DEPLOY FIX — beyond the §2 manifest]
+    ContextResolver<ObjectMapper>: JavaTimeModule + WRITE_DATES_AS_TIMESTAMPS
+    off (ISO-8601 strings, same shape the envelope's timestamp already uses).
+    Registered explicitly in RestApplication. See D3.
+
+ --------------------------------------------------------------------------------
+  PURPOSE — WHAT TASK 06 IS FOR, AND WHY IT FOLLOWS 01–05
+ --------------------------------------------------------------------------------
+
+  THE SHORT VERSION
+    Five tasks built a system reachable only from inside the JVM — entities,
+    queries, rules, identity, HTTP pipeline — with the last mile missing: the
+    boundary that speaks JSON to the outside. Task 06 is that mile for Auth:
+    it turns AuthService's Java API into the spec's HTTP API, and in doing so
+    writes the DTO/resource template (mutable validated request beans, record
+    responses with from(), thin resources, explicit statuses, one shared
+    envelope) that Listing/Booking/Message resources will copy verbatim.
+
+  LAYERING, NOW COMPLETE FOR AUTH (spec §1: Resource -> Service -> Repository)
+    api/AuthResource + dto/auth   <-- THIS TASK (boundary: JSON in/out, @Valid)
+    service/AuthService           <-- TASK 04, called unchanged
+    security/*                    <-- TASK 04 (+verify in 05), untouched
+    repository/*                  <-- TASK 02, untouched
+    domain/*                      <-- TASK 01, untouched
+    api pipeline (filter/mappers) <-- TASK 05, reused + 1 mapper added
+
+  WHAT TASKS 01–05 EACH GAVE TASK 06
+    - 01: the validation ANNOTATIONS finally executed (@Email/@NotBlank sat inert
+      on entities since Task 01 waiting for a @Valid boundary); User getters for
+      from(); UserRole for role fields. Side effect of HV arriving: entities are
+      now ALSO validated on persist (JPA AUTO mode) — harmless, all service-set
+      fields satisfy it.
+    - 02: nothing new needed (fourth straight task: zero new queries). findByEmail/
+      existsByEmail serve login/register exactly as Task 02's comments foretold.
+    - 03: the envelope shape the new mapper reuses (one definition, three mappers);
+      the thin-layer discipline the resource follows; "never serialize entities"
+      finally enforced by from().
+    - 04: AuthService called with ZERO signature changes (§0/§9: fit was clean —
+      the resource maps onto register/login/refresh/logout 1:1 with no workaround
+      anywhere). The INVALID_ROLE/INVALID_CREDENTIALS semantics the DTOs defer to.
+    - 05: the pipeline (filter/context/roles/Api+Generic mappers), +1 mapper;
+      WhoAmI as interop partner (login token -> whoami 200) before retirement;
+      RestApplication's explicit-register convention extended by 3 lines.
+
+  WHAT TASK 06 ADDS BACK
+    - The DTO/resource pattern, written once and copyable: the highest-leverage
+      artifact of the task (more than the endpoints themselves).
+    - A live 400 path — the first runtime proof of the whole BV stack.
+    - JacksonConfig — the JSON infrastructure every Instant-bearing DTO rides on.
+    - Retirement of the last throwaway (diagnostic/ gone; only
+      PersistenceSmokeCheck's test-source script remains, and it's test-scoped).
+
+  THE PROBLEM THIS TASK HAD TO SOLVE FIRST
+    Records or beans for requests? Chose boring-mutable-beans (§3.1) — not from
+    habit but from failure-mode analysis: a @Valid that silently never fires is
+    the worst outcome (invalid data reaching services that assume validated
+    input), and the bean path is the one with a decade of proof. Responses stay
+    records: nothing validates on the way out, Jackson serializes them cleanly
+    (proven live in Task 05 by WhoAmIResponse).
+
+  WHAT THIS TASK DELIBERATELY DID *NOT* DO
+    Non-Auth resources (one at a time); any AuthService/JwtService/exception
+    change (fit was clean — nothing to work around); a ValidationException type
+    (§4: nothing of ours throws in that path); malformed-JSON handling (§0: needs
+    its own mapper, not Auth-specific — and post-D2 the symptom is Jersey's
+    default 400 page, not a 500; same gap, updated description); tests.
+
+ --------------------------------------------------------------------------------
+  TASK 06 CONVENTIONS — AND WHERE EACH ONE CAME FROM
+ --------------------------------------------------------------------------------
+
+   Convention                        Origin            Why it exists
+   --------------------------------- ----------------- ---------------------------------
+   Requests: mutable beans + @Valid; Task 06 §3.1      beans = proven @Valid path;
+   responses: records + from()                         records = clean outward JSON;
+                                                       from() IS the no-entity-
+                                                       leak mechanism
+   from() co-located with its DTO    §3.2              mapping lives with the shape,
+                                                       not scattered in resources
+   Resources thin: map/delegate/map  §3.3 + Task 03    services own rules+tx; the
+   back, no logic, no tx, no crypto   layering          resource with an `if` about
+                                                       non-status logic is misplaced
+   Always return Response (201/200/  §3.4              status explicit, never JAX-RS's
+   204), never bare DTO                                default 200
+   No ValidationException type; map  §4 + §5           Jersey throws CVE before our
+   ConstraintViolationException                        code runs — catch that type
+   directly                                            directly
+   ADMIN passes DTO, dies in service §6 + Task 04 §7   DTO must never be the sole
+                                                       privilege guard
+   Login: no @Email, all failures    §6 + Task 04 §3.4 must not leak which input
+   -> identical 401                                     was wrong
+   JacksonConfig registered          deploy fix D3     every Instant-bearing DTO
+   explicitly                                          needs it; scanning stays off
+
+ --------------------------------------------------------------------------------
+  DESIGN PATTERNS USED IN TASK 06
+ --------------------------------------------------------------------------------
+   15) Boundary Object / DTO (§3.1–§3.2)
+      Definition: Distinct types for crossing a layer boundary, decoupled from
+      the domain's shape and lifecycle.
+      Applied: Request beans (validation + Jackson-in) vs records (Jackson-out)
+               vs entities (JPA) — three shapes for one concept, each owned by
+               its layer. from() factories are the single crossing point.
+      Why: API shape can evolve without touching tables; passwordHash can never
+           leak because it has no field to leak through.
+
+   16) Thin Adapter (AuthResource, §3.3)
+      Definition: A layer whose only job is translating between its neighbors'
+      protocols, containing no domain logic.
+      Applied: DTO->User/String->service->DTO; status codes are the only
+               decisions made here. §9.6 grep is the mechanical enforcement.
+      Why: Business rules stay in one testable place; adding ListingResource
+           later is mapping work, not rule work.
+
+   17) Provider-Based Cross-Cutting Validation (§5 + jersey-bean-validation)
+      Definition: A framework extension point applies a concern uniformly,
+      without call-site code.
+      Applied: @Valid annotations + auto-discovered BV feature + explicitly
+               registered mapper. Zero validation code in AuthResource.
+      Why: Every future @Valid gets the same 400 envelope for free.
+
+   Patterns deliberately NOT introduced:
+    - A generic DTO<->entity mapper (ModelMapper/MapStruct style) — from() per
+      DTO is explicit and total; reflection mapping hides the field list that
+      IS the security mechanism here.
+    - A ValidationException type — would require catching CVE just to rethrow,
+      pure ceremony (§4).
+
+ --------------------------------------------------------------------------------
+  DEFERRED (§8 + this task's additions) — STILL NOT BUILT
+ --------------------------------------------------------------------------------
+   - Non-Auth resources (Listing next — copies this task's pattern).
+   - Malformed-JSON mapper (own small mapper; symptom now Jersey-default 400
+     page post-D2, still not the envelope).
+   - Null-body POST edge (null DTO passes @Valid -> NPE -> 500 envelope):
+     observed during analysis, unmentioned in the task, outside the §10 matrix.
+     A @NotNull on the parameter or a resource-level guard is a one-liner for
+     whoever wants it — flagged, not snuck in.
+   - Email verification + password reset (no provider), login rate limiting
+     (live gap), expired-token cleanup (no scheduler), photo endpoints (no
+     storage), Booking/Message/Report/User services, auto-reject, conversations,
+     page clamping — all untouched.
+   - Envelope-shape confirmation (Task 05 flag) still open — now MORE urgent:
+     ValidationExceptionMapper bakes the same shape in a third place.
+
+ --------------------------------------------------------------------------------
+  VERIFICATION
+ --------------------------------------------------------------------------------
+   Static (§9.1–§9.7, with one documented deviation):
+   - 8 new files (7 manifest + JacksonConfig/D3). RestApplication: exactly the
+     §5 edit + JacksonConfig line; diagnostic/ deleted (§9.1 modulo D3).
+   - pom.xml: hibernate-validator + expressly + jersey-bean-validation NEW;
+     validation-api NOT duplicated (§1 anticipated this). +jsr310 (D3).
+   - mvn -q -DskipTests compile -> BUILD SUCCESS, before and after deletion.
+   - javax. 0 hits in dto/ and api/. Request DTOs = classes w/ no-arg ctor;
+     responses = records. AuthResource: no PasswordHasher/JwtService/
+     TransactionRunner/repository. passwordHash: only the doc-comment line.
+   - No change to AuthService/JwtService/exceptions (§0 kept — fit was clean,
+     §10.2: no workaround anywhere).
+
+   Live (§10, isolated Tomcat 10.1.60 :8081, fresh drop-and-create slate):
+   - register valid HOST -> 201 + full UserResponse, createdAt ISO, NO passwordHash.
+   - same again -> 409 EMAIL_ALREADY_EXISTS envelope.
+   - missing email -> 400 VALIDATION_ERROR, our envelope (settles mapper
+     precedence: explicit registration beats jersey-bean-validation's default).
+   - bad email / short password -> 400 with interpolated messages (settles HV
+     8.0.5 vs validation-api 3.0.2: WORKS — validation fired, expressly rendered).
+   - ADMIN role -> passes @Valid, 403 INVALID_ROLE from the service (two layers).
+   - login -> 200 + accessToken/refreshToken/nested user; wrong pw AND malformed
+     email -> identical 401 INVALID_CREDENTIALS (the deliberate LoginRequest design).
+   - login token -> GET /api/_diag/whoami -> 200 true/HOST (§10.4 interop: Task 05
+     pipeline serving Task 06 tokens) — THEN diagnostic/ deleted.
+   - refresh -> 200 + DIFFERENT refreshToken (rotation); original reuse -> 401.
+   - logout -> 204 empty; refresh-after-logout -> 401; re-logout -> 204 (idempotent).
+   - Post-deletion redeploy: register+login green, /api/_diag/whoami -> 404.
+   - No web.xml, no HK2/Jackson conflict (mediated to 2.18.5), .env via classpath.
+
+ --------------------------------------------------------------------------------
+  DEPLOY DEVIATION (§10.4-equivalent) — D3: INSTANT SERIALIZATION
+ --------------------------------------------------------------------------------
+   Symptom: register PERSISTED the user, then its own 201 failed — response body
+   was Jackson's "Instant not supported by default: add jackson-datatype-jsr310"
+   as a 400 text page (duplicate-register 409 right after proved the row existed).
+   Cause: jersey-media-json-jackson's default ObjectMapper has no JavaTimeModule;
+   Task 05 never hit it (WhoAmIResponse is boolean+Strings — no dates). Every
+   future response DTO carries Instants, so this blocked all of them, not just Auth.
+   Fix (minimal, bootstrap-scoped, not endpoint-scoped): +jsr310 2.18.5 dep
+   (version-matched to jackson-databind) + api/JacksonConfig (ContextResolver,
+   JavaTimeModule, timestamps OFF) + 1 register line. 8th file + 4th dep beyond
+   the manifest — documented here instead of hidden. The alternative (String-ify
+   every Instant in every DTO) would corrupt all response shapes task after task.
+   §9 re-verified after the fix (javax 0, compile green, §9.6/§9.7 intact).
+
+ --------------------------------------------------------------------------------
+  AMBIGUITIES & FLAGS
+ --------------------------------------------------------------------------------
+   1. Spec §4 request/response shapes unverifiable (no spec file in repo) —
+      implemented literally per §6/§7. The register-no-tokens assumption (Task 04
+      flag) is now BAKED INTO the 201 body: if the spec wants auto-login, the
+      AuthResponse already exists to return — change is small, but the DTO shape
+      (201-with-tokens vs 201-user-only) must be settled before clients build on
+      it. Last cheap moment: now.
+   2. 403-envelope question (Task 05 D2 note) confirmed in passing: role
+      rejections still return Jersey's default page, not the envelope. Still
+      deferred per §0.
+   3. Null-body 500 edge (above) — one-line fix available, left for whoever owns
+      the next resource task to decide as the pattern (apply to all resources or none).
+
+ --------------------------------------------------------------------------------
+  REPORT BACK (per TASK-06 §10)
+ --------------------------------------------------------------------------------
+   1. Files: dto/auth/{RegisterRequest, LoginRequest, RefreshTokenRequest,
+      UserResponse, AuthResponse}.java; api/{ValidationExceptionMapper,
+      AuthResource, JacksonConfig(D3)}.java. RestApplication: +3 registrations,
+      −WhoAmI (deleted with its package after the interop proof).
+   2. AUTH SERVICE FIT: clean — zero signature changes, zero workarounds. Every
+      call maps 1:1 (register builds the User the service expects incl. leaving
+      passwordHash/verified/blocked for the service to set; login/refresh/logout
+      pass strings straight through). The task's "flag, don't work around"
+      clause was never triggered.
+   3. E2E: full §10 matrix above, all green, plus rotation/idempotency/ADMIN/
+      malformed-email extras. First task verifiable with real HTTP and no
+      throwaway script — MintTokens finally unnecessary (retired with WhoAmI).
+   4. Spec §4: implemented literally; no spec file in repo to check shapes
+      against — flags 1–3 above are the residual risks.
+
+  Suggested commit:
+   feat: add Auth DTOs, Bean Validation wiring, and AuthResource
+
+   hibernate-validator + expressly + jersey-bean-validation make @Valid
+   real for the first time (gap flagged since Task 01). Request DTOs
+   are plain validated beans; response DTOs are records with a from()
+   factory — UserResponse.from(User) is where passwordHash actually
+   stops reaching the client. ValidationExceptionMapper gives a failed
+   @Valid the same error envelope as every other failure, without a
+   new ValidationException type: Jersey throws ConstraintViolationException
+   directly, nothing of ours needs to catch and rethrow it.
+   AuthResource is a thin boundary over the unchanged AuthService.
+   WhoAmIResource retired — this is the real thing now.
+   (+ deploy fix: JacksonConfig + jsr310 — Instant-bearing DTOs couldn't
+   serialize without JavaTimeModule; 8th file, documented in Task.txt.)
+================================================================================
