@@ -1,0 +1,2709 @@
+================================================================================
+ TASK 01 & TASK 02 — SUMMARY
+ DarCom Co-Hosting Platform (darcom-backend)
+ Stack: Java 21 · Jakarta EE 10 (Persistence 3.1, Validation 3.0) · Hibernate 6.4.4 · PostgreSQL
+================================================================================
+
+--------------------------------------------------------------------------------
+ TASK 01 — Domain Entities (JPA)
+--------------------------------------------------------------------------------
+ Goal: Create the JPA domain model from API-Specification.md §3/§12/§13 as
+       Hibernate-managed entities that generate the DDL via drop-and-create.
+
+ Deliverable: 12 files — 7 entities + 5 enums. No repositories/services.
+
+ Files created (src/main/java/com/backend/domain):
+  1. domain/User.java                    @Table(users)
+  2. domain/Listing.java                 @Table(listings)
+  3. domain/Photo.java                   @Table(photos)
+  4. domain/Booking.java                 @Table(bookings)
+  5. domain/Message.java                 @Table(messages)
+  6. domain/Report.java                  @Table(reports)
+  7. domain/RefreshToken.java            @Table(refresh_tokens)
+  8. domain/enums/UserRole.java          HOST, VISITOR, ADMIN
+  9. domain/enums/ListingStatus.java     ACTIVE, HIDDEN, REMOVED
+ 10. domain/enums/BookingStatus.java     PENDING, CONFIRMED, REJECTED, CANCELLED + state machine
+ 11. domain/enums/ReportReason.java      SCAM, MISLEADING_LISTING, INAPPROPRIATE_BEHAVIOR, OTHER
+ 12. domain/enums/ReportStatus.java      OPEN, REVIEWED, DISMISSED, ACTIONED
+
+ Global conventions (all 7 entities):
+  - No inheritance/@MappedSuperclass (audit columns differ per table)
+  - @Id @GeneratedValue(GENERATION.UUID) java.util.UUID, explicit @Column(name) snake_case
+  - All @ManyToOne FetchType.LAZY, optional=false where FK NOT NULL
+  - Only bidirectional: Listing.photos <-> Photo.listing (cascade ALL + orphanRemoval + @OrderBy sortOrder)
+  - No Lombok, hand-written getters/setters, public no-arg ctor required by JPA
+  - equals/hashCode: final, id-based (id!=null && id.equals(other.getId())), hash = Class.hashCode() (proxy-safe)
+  - toString: scalar fields only (never association/collection, never passwordHash/tokenHash)
+  - Timestamps: Instant (TIMESTAMPTZ) via @PrePersist/@PreUpdate, LocalDate for checkIn/checkOut
+  - Enums: @Enumerated(STRING), never ORDINAL; Jakarta imports only
+
+ Entity details:
+  User: email(@Email @NotBlank unique 255), passwordHash(255), fullName(255), phone(30), role(UserRole 20),
+        verified/blocked boolean, createdAt (TIMESTAMPTZ). No collections on User by design.
+  Listing: host(User FK host_id), title(255), description(TEXT), city(120), address(255),
+           pricePerNight(BigDecimal 10,2 @PositiveOrZero), currency(3 default MAD), mealsIncluded bool,
+           activities @ElementCollection Set<String> -> listing_activities(listing_id, activity 120) LinkedHashSet,
+           status(ListingStatus ACTIVE), photos List<Photo>, createdAt, updatedAt. Helpers addPhoto/removePhoto + clear-and-addAll setters.
+  Photo: listing(FK listing_id), url(500 @NotBlank), sortOrder int 0. No timestamps.
+  Booking: listing(FK), visitor(FK visitor_id), checkIn/checkOut LocalDate @NotNull, guestsCount int @Positive,
+           status(BookingStatus PENDING), createdAt, updatedAt. No totalPrice/message fields. TODO checkOut>checkIn in service.
+  Message: listing(FK), sender(FK sender_id), receiver(FK receiver_id), body(TEXT @NotBlank), sentAt(PrePersist), readAt.
+           Threads derived via (listing_id, sender_id, receiver_id).
+  Report: reporter(FK), reportedHost(FK reported_host_id), listing(FK nullable), reason(ReportReason 30),
+          details(TEXT), status(ReportStatus OPEN), adminNotes(TEXT), createdAt, reviewedAt(admin action).
+  RefreshToken: user(FK user_id), tokenHash(512 unique @NotBlank, stores hash never raw), expiresAt, createdAt,
+                isExpired() = expiresAt < now, toString excludes hash.
+
+ Companion changes:
+  pom.xml: added jakarta.validation-api 3.0.2 (runtime, because jakarta.jakartaee-api is provided; same fix as persistence-api)
+  persistence.xml (META-INF): added 7 explicit <class> entries for reliable discovery under RESOURCE_LOCAL/WAR (invest-pu retained)
+  Drop-and-create retained: Hibernate rebuilds schema from annotations on each EMF start; data does not survive restart.
+
+ Verification: mvn clean compile BUILD SUCCESS (13 src files with TestServlet), no FetchType.EAGER, no javax., no ORDINAL.
+
+--------------------------------------------------------------------------------
+ TASK 02 — Persistence Bootstrap & Repository Layer
+--------------------------------------------------------------------------------
+ Goal: Centralize JPA bootstrap and provide a typed repository layer on top of
+       Task 01 entities. Repositories return entities only; no services/DTOs/JAX-RS.
+       No transaction management (Service layer concern per spec §1).
+
+ Deliverable: 10 files — 1 bootstrap + 1 pagination type + 1 generic base + 7 specific repos.
+
+ Files created:
+  1. persistence/JpaUtil.java
+  2. repository/Pageable.java
+  3. repository/GenericRepository.java
+  4. repository/UserRepository.java
+  5. repository/ListingRepository.java
+  6. repository/PhotoRepository.java
+  7. repository/BookingRepository.java
+  8. repository/MessageRepository.java
+  9. repository/ReportRepository.java
+ 10. repository/RefreshTokenRepository.java
+
+ No changes to domain/**, pom.xml, persistence.xml in this task.
+
+ --------------------------------------------------------------------------------
+  CLASS / FUNCTION DEFINITIONS — TASK 02
+ --------------------------------------------------------------------------------
+
+ 1) persistence.JpaUtil  [src/main/java/com/backend/persistence/JpaUtil.java]
+    Purpose: Single owner of EntityManagerFactory for whole app. Replaces inline
+             Persistence.createEntityManagerFactory(...) from smoke checks.
+             Uses Dotenv to inject DB_URL/DB_USER/DB_PASSWORD + driver.
+
+    - private static final String PERSISTENCE_UNIT_NAME = "invest-pu"
+      Constant matching persistence.xml persistence-unit name. Update in one place if renamed.
+
+    - private static final EntityManagerFactory EMF = buildEntityManagerFactory()
+      Eagerly built singleton, reused for all EntityManagers.
+
+    - private JpaUtil() {}
+      Prevent instantiation (utility class, final).
+
+    - private static EntityManagerFactory buildEntityManagerFactory() : EntityManagerFactory
+      Loads Dotenv.load(), builds Map<String,String> props:
+        jakarta.persistence.jdbc.url      -> dotenv.get("DB_URL")
+        jakarta.persistence.jdbc.user     -> dotenv.get("DB_USER")
+        jakarta.persistence.jdbc.password -> dotenv.get("DB_PASSWORD")
+        jakarta.persistence.jdbc.driver   -> "org.postgresql.Driver"
+      Returns: Persistence.createEntityManagerFactory(PERSISTENCE_UNIT_NAME, props)
+
+    - public static EntityManager createEntityManager() : EntityManager
+      Delegates to EMF.createEntityManager(). Caller (currently manual, later Service) opens/closes transaction.
+
+    - public static void shutdown() : void
+      Closes EMF if open. Not yet wired; intended for ServletContextListener.contextDestroyed().
+
+ 2) repository.Pageable  [src/main/java/com/backend/repository/Pageable.java]
+    Purpose: Typed pagination envelope. Every paginated repo method takes one
+             Pageable instead of two raw ints. Validation here, size clamping (max 100) in Service/Resource.
+
+    - public record Pageable(int page, int size)
+      Compact record. Canonical constructor validates:
+        if page < 0 throw IllegalArgumentException("page must be >= 0")
+        if size < 1 throw IllegalArgumentException("size must be >= 1")
+
+    - public int offset() : int
+      Returns page * size (firstResult for JPA). Used by all paginated queries.
+
+ 3) repository.GenericRepository<T>  [src/main/java/com/backend/repository/GenericRepository.java]
+    Purpose: Shared CRUD for all entities. UUID is hard-coded as ID type because
+             Task 01 mandates UUID for every entity; no generic <ID> needed.
+
+    Fields:
+      protected final EntityManager em
+      protected final Class<T> entityClass
+
+    - public GenericRepository(EntityManager em, Class<T> entityClass)
+      Constructor — borrows EM (never creates/closes), stores target class.
+
+    - public Optional<T> findById(UUID id) : Optional<T>
+      em.find(entityClass, id) wrapped in Optional.ofNullable. Proxy-safe.
+
+    - public List<T> findAll(Pageable pageable) : List<T>
+      Criteria API: cb.createQuery(entityClass), cq.select(cq.from(entityClass)), setFirstResult(offset)/maxResults(size).
+
+    - public T create(T entity) : T
+      em.persist(entity); return entity. Requires active transaction outside repo.
+
+    - public T update(T entity) : T
+      return em.merge(entity). Works for detached instances.
+
+    - public void delete(T entity) : void
+      em.remove(em.contains(entity) ? entity : em.merge(entity)) — merges first if detached to avoid IllegalArgumentException.
+
+    - public void deleteById(UUID id) : void
+      findById(id).ifPresent(this::delete) — no exception if missing.
+
+    - public long count() : long
+      Criteria: select(cb.count(cq.from(entityClass))), getSingleResult().
+
+ 4) repository.UserRepository extends GenericRepository<User>
+    Serves: POST /auth/register (duplicate), POST /auth/login, POST /auth/resend-verification, GET /admin/users
+    Constructor: public UserRepository(EntityManager em) -> super(em, User.class)
+
+    - public Optional<User> findByEmail(String email) : Optional<User>
+      JPQL: "SELECT u FROM User u WHERE u.email = :email" -> getResultStream().findFirst() (no NoResultException, returns empty Optional).
+      Used for login lookup.
+
+    - public boolean existsByEmail(String email) : boolean
+      JPQL COUNT: "SELECT COUNT(u) FROM User u WHERE u.email = :email" -> count>0. Lightweight 409 check for register without hydrating User.
+
+    - public List<User> search(UserRole role, Boolean verified, Boolean blocked, String searchText, Pageable pageable) : List<User>
+      Criteria API with 4 optional filters. Builds Predicate[] via searchPredicates(...), where(cb), orderBy(createdAt DESC), paginated.
+      Endpoint: GET /admin/users?role=&verified=&blocked=&search= (search matches fullName OR email, case-insensitive LIKE %text%).
+
+    - public long countSearch(UserRole role, Boolean verified, Boolean blocked, String searchText) : long
+      Same predicates as search() but select(cb.count(root)). For paginated envelope totalItems.
+
+    - private Predicate[] searchPredicates(CriteriaBuilder cb, Root<User> root, UserRole role, Boolean verified, Boolean blocked, String searchText) : Predicate[]
+      Adds: role==, verified==, blocked== if non-null; if searchText non-blank -> OR( lower(fullName) LIKE %lower%, lower(email) LIKE % ). Returns toArray.
+
+ 5) repository.ListingRepository extends GenericRepository<Listing>
+    Serves: GET /listings (public search), GET /listings/mine, block/unblock side effect (§10)
+    Constructor: public ListingRepository(EntityManager em)
+
+    - public List<Listing> findByHost(User host, Pageable pageable) : List<Listing>
+      JPQL: "SELECT l FROM Listing l WHERE l.host = :host ORDER BY l.createdAt DESC" paginated. For GET /listings/mine (host sees all statuses).
+
+    - public List<Listing> findByHostAndStatus(User host, ListingStatus status) : List<Listing>
+      JPQL: "SELECT l FROM Listing l WHERE l.host = :host AND l.status = :status" (no pagination). For §10 blocking: hide all ACTIVE listings of blocked host.
+
+    - public List<Listing> search(String city, BigDecimal minPrice, BigDecimal maxPrice, Boolean mealsIncluded, Pageable pageable) : List<Listing>
+      Criteria API. Always adds status==ACTIVE. Optionally adds: city case-insensitive equality, pricePerNight >= minPrice, <= maxPrice, mealsIncluded==. orderBy(createdAt DESC) paginated.
+      Endpoint: GET /listings?city=&minPrice=&maxPrice=&mealsIncluded=
+
+    - public long countSearch(String city, BigDecimal minPrice, BigDecimal maxPrice, Boolean mealsIncluded) : long
+      Same predicates, select COUNT, for pagination total.
+
+    - private Predicate[] searchPredicates(CriteriaBuilder cb, Root<Listing> root, String city, BigDecimal minPrice, BigDecimal maxPrice, Boolean mealsIncluded) : Predicate[]
+      Always ACTIVE; conditionally adds 4 filters as above.
+
+ 6) repository.PhotoRepository extends GenericRepository<Photo>
+    Serves: POST /listings/{id}/photos, DELETE /listings/{id}/photos/{photoId}
+    Constructor: public PhotoRepository(EntityManager em)
+    No extra methods. Generic findById/create/delete suffice. Listing.photos already gives all photos for a listing; no independent photo search needed per spec.
+
+ 7) repository.BookingRepository extends GenericRepository<Booking>
+    Serves: GET /bookings/mine, GET /bookings/received, overlap check for PATCH /bookings/{id}/status, delete guard DELETE /listings/{id}
+    Constructor: public BookingRepository(EntityManager em)
+
+    - public List<Booking> findByVisitor(User visitor, Pageable pageable) : List<Booking>
+      JPQL: "SELECT b FROM Booking b WHERE b.visitor = :visitor ORDER BY b.createdAt DESC" paginated. For GET /bookings/mine.
+
+    - public List<Booking> findByListingHost(User host, BookingStatus status, Pageable pageable) : List<Booking>
+      JPQL with optional status: "SELECT b FROM Booking b WHERE b.listing.host = :host" + (status!=null ? " AND b.status = :status" : "") + " ORDER BY b.createdAt DESC"
+      Uses TypedQuery, conditionally setParameter("status"). For GET /bookings/received?status= (across all host listings).
+
+    - public List<Booking> findOverlapping(Listing listing, LocalDate checkIn, LocalDate checkOut, List<BookingStatus> statuses, UUID excludeBookingId) : List<Booking>
+      JPQL: "SELECT b FROM Booking b WHERE b.listing = :listing AND b.status IN :statuses AND b.id <> :excludeId AND b.checkIn < :checkOut AND b.checkOut > :checkIn"
+      Half-open interval overlap logic: [a1,a2) overlaps [b1,b2) iff a1<b2 && a2>b1. Same-day turnover (checkout==checkin) is NOT overlap. Backs PATCH /bookings/{id}/status auto-reject: on CONFIRMED, find other PENDING overlapping bookings to reject. Service decides when to call.
+
+    - public boolean existsActiveBookingForListing(Listing listing) : boolean
+      JPQL COUNT: "SELECT COUNT(b) FROM Booking b WHERE b.listing = :listing AND b.status IN :statuses" with PENDING,CONFIRMED -> count>0. Guard for DELETE /listings/{id} -> 409 CANNOT_DELETE_WITH_ACTIVE_BOOKINGS.
+
+ 8) repository.MessageRepository extends GenericRepository<Message>
+    Serves: GET /listings/{listingId}/messages
+    Constructor: public MessageRepository(EntityManager em)
+
+    - public List<Message> findThread(Listing listing, User userA, User userB, Pageable pageable) : List<Message>
+      JPQL: "SELECT m FROM Message m WHERE m.listing = :listing AND ((m.sender=:userA AND m.receiver=:userB) OR (m.sender=:userB AND m.receiver=:userA)) ORDER BY m.sentAt ASC" paginated.
+      Returns chronological thread between two participants on one listing, regardless of direction. Resolving who userA/userB are (caller vs withUser) is Resource/Service, not repo.
+
+ 9) repository.ReportRepository extends GenericRepository<Report>
+    Serves: GET /admin/reports, count on GET /admin/users/{id}
+    Constructor: public ReportRepository(EntityManager em)
+
+    - public List<Report> findByStatus(ReportStatus status, Pageable pageable) : List<Report>
+      JPQL with optional filter: "SELECT r FROM Report r" + (status!=null ? " WHERE r.status = :status" : "") + " ORDER BY r.createdAt DESC" paginated via TypedQuery.
+
+    - public long countByReportedHost(User host) : long
+      JPQL COUNT: "SELECT COUNT(r) FROM Report r WHERE r.reportedHost = :host" -> total reports against a host.
+
+ 10) repository.RefreshTokenRepository extends GenericRepository<RefreshToken>
+     Serves: POST /auth/refresh, POST /auth/logout
+     Constructor: public RefreshTokenRepository(EntityManager em)
+
+     - public Optional<RefreshToken> findByTokenHash(String tokenHash) : Optional<RefreshToken>
+       JPQL: "SELECT rt FROM RefreshToken rt WHERE rt.tokenHash = :hash" -> getResultStream().findFirst(). Lookup by hash, never raw token.
+
+     - public void deleteByTokenHash(String tokenHash) : void
+       findByTokenHash(hash).ifPresent(this::delete) — revokes single token for logout.
+
+     - public int deleteAllExpired() : int
+       Bulk JPQL DELETE: "DELETE FROM RefreshToken rt WHERE rt.expiresAt < CURRENT_TIMESTAMP" -> executeUpdate() returns deleted count. Bypasses persistence context; not yet scheduled, for future cleanup job.
+
+ --------------------------------------------------------------------------------
+ DESIGN PATTERNS USED IN TASK 02
+ --------------------------------------------------------------------------------
+  Yes — 4 deliberate patterns. No accidental pattern bloat.
+
+  1) Repository Pattern (primary pattern for the whole task)
+     Definition: Mediates between domain and persistence. Encapsulates
+     storage/retrieval/queries, exposes collection-like interface for
+     domain objects, hides JPQL/Criteria details. Returns entities only,
+     never DTOs (mapping is Task 03).
+     Applied: GenericRepository<T> [repository/GenericRepository.java:10]
+             as generic collection facade over EntityManager, plus 7
+             typed extensions (UserRepository, ListingRepository,
+             PhotoRepository, BookingRepository, MessageRepository,
+             ReportRepository, RefreshTokenRepository). Each adds only
+             the query methods its endpoints need (§6.1-6.7).
+             Callers never call em.persist/merge directly.
+     Why: Spec §1 layering (Repository → Service). Tests can mock/swap
+          repos; queries change in one place.
+
+  2) Singleton — Eager Static Initialization via Utility Class (JpaUtil)
+     Definition: Ensure exactly one instance of a resource, globally
+     accessible, thread-safe without synchronization.
+     Applied: persistence/JpaUtil.java:11-18
+             final class, private JpaUtil(){}, private static final EMF
+             = buildEntityManagerFactory(), static accessors
+             createEntityManager()/shutdown(). EMF built eagerly at
+             class-load; JVM guarantees thread-safety. Matches
+             persistence-unit "invest-pu" in one place.
+     Why: EntityManagerFactory is heavyweight (connection pool + metamodel);
+          per JPA spec it must be singleton per app.
+
+  3) Factory Method (Static Factory) + Value Object
+     Definition: Creator method manufactures product without exposing
+     construction details.
+     Applied: JpaUtil.createEntityManager() [JpaUtil.java:143] delegates
+             to EMF.createEntityManager(). Callers get a fresh
+             EntityManager without knowing Dotenv props or PU name.
+             Pageable [repository/Pageable.java:3] is a Value Object /
+             Parameter Object record (page, size, offset()) with
+             invariant validation — immutable factory for pagination.
+     Why: Centralizes creation; Service later can replace with CDI
+          @Produces without changing repositories.
+
+  4) Dependency Injection — Constructor Injection + Inversion of Control
+     Definition: Dependencies are supplied from outside, not created
+     inside. Repositories "borrow" their collaborator.
+     Applied: Every repository ctor takes EntityManager exclusively
+             (UserRepository(EntityManager em) [UserRepository.java:14],
+              ListingRepository etc.), GenericRepository(EntityManager, Class<T>).
+             No repo calls new JpaUtil(), Persistence.create..., or
+             getTransaction(). Per spec §3.1 borrow-not-own.
+     Why: Repo works whether or not a transaction is already open;
+          Service controls tx boundary; unit tests can inject a
+          test EntityManager (or mock).
+
+  5) Template Method via Inheritance (Generic → Specific)
+     Definition: Base class defines skeleton of operations; subclasses
+     fill in specializations.
+     Applied: GenericRepository defines findById/findAll/create/update/
+             delete/count [GenericRepository.java:199-235]; specific
+             repos inherit and only override/add searchPredicates or
+             JPQL queries. Avoids duplicating pagination and CRUD.
+     Why: DRY; 7 repos share identical CRUD without copy-paste.
+
+  Patterns deliberately NOT used:
+   - Active Record (entities would manage their own persistence) — avoided
+     per spec; entities stay anemic POJOs, repos handle persistence.
+   - Service Locator / CDI (@ApplicationScoped/@Inject) — deferred per §0/§7.
+   - Unit of Work exposed in repos — transactions stay in Service layer.
+
+ --------------------------------------------------------------------------------
+ DEFERRED (§7) — STILL NOT BUILT
+ --------------------------------------------------------------------------------
+  - GET /messages/conversations : grouped by (listing, counterpart) with last message + unread count — requires DTO projection, not List<Message>; deferred until Task 03 DTO shape known.
+  - Booking auto-reject workflow : findOverlapping is the query; looping/rejecting is Service orchestration.
+  - CDI wiring (@ApplicationScoped/@Inject/@Produces) : repositories stay plain new XRepository(em); wiring later.
+
+ --------------------------------------------------------------------------------
+ VERIFICATION
+ --------------------------------------------------------------------------------
+  - Exactly 12 Task01 files + 10 Task02 files (23 src with TestServlet)
+  - No changes to domain/** in Task02; no pom/persistence changes in Task02
+  - mvn clean compile -> BUILD SUCCESS
+  - grep getTransaction -> 0 hits, grep javax. -> 0 hits, grep ORDINAL -> 0 hits
+  - All paginated methods take Pageable; all repos ctor EntityManager only
+  - No DTO/JAX-RS/HTTP status in repository code (comments only)
+  Usage (manual smoke): EntityManager em = JpaUtil.createEntityManager(); em.getTransaction().begin(); new UserRepository(em).create(user); em.getTransaction().commit(); em.close();
+
+  Suggested commits:
+   feat(domain): add JPA entities and enums for co-hosting MVP
+   feat: add JPA persistence bootstrap and repository layer
+================================================================================
+
+
+================================================================================
+ TASK 03 — Transactions, Exceptions & Listing Service
+ DarCom Co-Hosting Platform (darcom-backend)
+ Stack: Java 21 · Jakarta EE 10 (Persistence 3.1, Validation 3.0) · Hibernate 6.4.4 · PostgreSQL
+================================================================================
+
+  Goal: Give the Service layer a real transaction boundary and a way to signal
+       spec-defined failures without a Resource layer to catch them yet.
+       ListingService covers all six §6 Listings endpoints.
+
+  Deliverable: 7 new files + 2 additive methods in 1 existing file. No tests
+               (explicitly out of scope per §0).
+
+ --------------------------------------------------------------------------------
+  PURPOSE — WHAT TASK 03 IS FOR, AND WHY IT FOLLOWS 01 AND 02
+ --------------------------------------------------------------------------------
+
+  THE SHORT VERSION
+    Task 01 built the nouns. Task 02 built the verbs that read and write them.
+    Task 03 builds the rules — the layer that decides whether an operation is
+    allowed, and that owns the transaction the operation runs in.
+    Without it, Tasks 01+02 are a working database access library with no
+    business logic anywhere in the project.
+
+  WHERE THE THREE TASKS SIT IN THE SPEC'S LAYERING (§1: Resource -> Service -> Repository)
+    +------------------------------------------------------------------+
+    |  api/         <-- NOT BUILT YET  (Task 04+)  HTTP, DTOs, auth,     |
+    |                 the only layer that knows about status codes,      |
+    |                 JSON, bearer tokens, @Valid, exception mappers     |
+    +------------------------------------------------------------------+
+    |  service/     <-- THIS TASK.  Business rules + transaction         |
+    |                 boundary. Knows "is this host allowed to do this?"  |
+    |                 and "do these two writes belong in one commit?"    |
+    |                 Knows nothing about HTTP.                         |
+    +------------------------------------------------------------------+
+    |  repository/  <-- TASK 02.  Query construction only.               |
+    |                 "listings matching these filters, page N".         |
+    |                 Knows nothing about business rules.               |
+    +------------------------------------------------------------------+
+    |  domain/      <-- TASK 01.  Shape + mapping + invariants.         |
+    +------------------------------------------------------------------+
+    |  persistence/ <-- TASK 02.  Who owns the EntityManagerFactory.    |
+    +------------------------------------------------------------------+
+
+  WHAT TASK 01 GAVE TASK 03 (and it is not re-litigated here)
+    - The entities Task 03 operates on: Listing, User, Photo, and the
+      ListingStatus enum. TASK-03 §0 explicitly forbids touching domain/** —
+      ListingService never adds a field, an annotation, or a validation rule to
+      an entity. Business rules live in the service, not smeared into the model.
+    - The lazy/eager shape of those entities, which dictates task design:
+      every @ManyToOne is LAZY and `activities` is a LAZY @ElementCollection
+      (§Task 01). A lazy association read outside a live session throws
+      LazyInitializationException. That single fact is why Task 03 needs
+      (a) a transaction boundary that stays open for exactly the right amount
+      of time, and (b) a fetch strategy for anything handed back to a caller.
+      TASK-03 §3.5 (cheap findById vs findByIdWithDetails) and §6.1 are both
+      direct consequences of a Task 01 decision, not new preferences.
+    - The `equals`/`hashCode` convention (id-based, proxy-safe, `Class.hashCode()`)
+      which is what makes `listing.getHost().getId()` safe to call on a lazy
+      proxy in delete()'s ownership check.
+    - `Listing.setActivities(...)` clear-then-addAll behaviour, which is why
+      `update` needs no explicit Hibernate.initialize but `getById` does.
+    - hibernate-core, already a dependency — so `Hibernate.initialize(...)` used
+      by getById costs nothing new. No pom.xml change in this task.
+
+  WHAT TASK 02 GAVE TASK 03
+    - JpaUtil: the single owner of the EntityManagerFactory. Task 03's
+      TransactionRunner calls `JpaUtil.createEntityManager()` and is the *only*
+      class in service/ that does. Task 02 deliberately shipped with "no
+      transaction management (Service layer concern per spec §1)" — that
+      concern is exactly what Task 03 now delivers, so the two tasks hand off
+      cleanly rather than overlapping.
+    - The repository layer, borrowed not owned. Every repository takes an
+      EntityManager as a constructor argument and never creates or closes one
+      (Task 02 §3.1). That is what makes TransactionRunner possible: it creates
+      the EM, hands it to the lambda, and the lambda uses it to `new
+      ListingRepository(em)` — the repo has no idea a transaction is happening.
+      Had Task 02's repos created their own EntityManagers, the entire
+      TransactionRunner design would be impossible.
+    - ListingRepository itself. create/getById/search/findMine/update/delete in
+      ListingService map almost 1:1 onto existing repo methods: create->create,
+      search->search+countSearch, findMine->findByHost, update->update,
+      delete->update (soft) + BookingRepository.existsActiveBookingForListing.
+      ListingService is mostly orchestration and rules, not new SQL.
+    - Pageable, used unchanged as the pagination input to search and findMine.
+      Task 02 left size-clamping (max 100) to the Service/Resource layer; this
+      task passes it through rather than clamping, so that stays open.
+    - The two Task 02 gaps Task 03 had to close. Building a real caller exposed
+      that findByHost had no count-side counterpart (countByHost — the same
+      search/countSearch pairing already existed for the public search), and
+      that no repo method loaded a Listing with its associations fetched
+      (findByIdWithDetails — needed the moment a Listing outlives the
+      transaction that read it). Both are additive; no Task 02 method was
+      renamed, re-signed, or removed.
+
+  WHAT TASK 03 ADDS BACK TO THE PILE
+    - TransactionRunner: the missing transaction boundary. It is the one place
+      in the whole codebase allowed to call getTransaction(), which is the
+      mechanical guarantee that no service method opens a half-finished
+      transaction. Every future service (Booking, Message, Report, Auth) reuses
+      it unchanged.
+    - The ApiException tree: how a layer with no HTTP awareness signals a
+      failure. status + errorCode + message are exactly the §1 error envelope,
+      so a future ExceptionMapper is pure passthrough with no translation logic.
+    - PagedResult<T>: the count-side half of the §1 paginated envelope, generic
+      and shared, so Booking/Message/Admin services do not each invent their own.
+    - ListingService: the first real business rules in the project — verified
+      email to publish, owner-only to edit or delete, no delete while bookings
+      are pending/confirmed, soft delete rather than hard.
+
+  THE CONVERSATION THIS TASK HAD TO HAVE FIRST
+    There is no Auth layer yet, so nothing can hand a service a "who is calling".
+    Task 03 resolves this by having every method that needs the caller take an
+    already-resolved `User` (TASK-03 §3.1). ListingService.create(User, Listing)
+    is therefore fully callable today; the only missing piece is upstream, and
+    it belongs to Task 04+ with the Resource layer. The alternative — stubbing
+    a fake auth context — would have been a layer that had to be thrown away.
+
+  WHAT THIS TASK DELIBERATELY DID *NOT* DO
+    It stopped at the service layer. No DTOs, no JAX-RS resources, no exception
+    mapper, no CDI annotations, no JWT parsing, no ValidationException/400, no
+    services other than Listing, no photo endpoints, no tests. Every one of
+    those is either blocked on a missing prerequisite (storage backend for
+    photos, a Resource layer for DTOs and mappers) or is a Resource-layer
+    concern (400s via @Valid, HTTP status knowledge). Building them here would
+    have meant building things twice.
+
+ --------------------------------------------------------------------------------
+  TASK 03 CONVENTIONS — AND WHERE EACH ONE CAME FROM
+ --------------------------------------------------------------------------------
+
+   Convention                        Origin            Why it exists
+   --------------------------------- ----------------- ---------------------------------
+   Services take a resolved User,    TASK-03 §3.1      no Auth exists to hand a
+   never a token                                        service a caller identity;
+                                                       identifying is not a service's job
+   Everything through                TASK-02 §3.1 +    repos borrow an EM, they never
+   TransactionRunner                 spec §1            own one; so *someone* must
+                                                       create it, and that someone is
+                                                       exactly one class
+   Stateless service, `new` it       spec §1            keeps it testable now and
+                                                       a one-line @ApplicationScoped
+                                                       change later
+   Throw, don't return a code        spec §1 error      one envelope for every failure;
+                                     envelope           no per-callsite error shapes
+   Cheap findById vs                 TASK 01 lazy       Task 02 shipped both a cheap
+   findByIdWithDetails               associations       and no detailed finder; the
+                                                       detailed one was added here
+                                                       because a caller finally existed
+   No domain/** edits                TASK-03 §0         rules belong in the service layer;
+                                                       Task 01's model is the contract
+
+ --------------------------------------------------------------------------------
+
+
+ Files created (src/main/java/com/backend):
+   1. exception/ApiException.java        abstract base — status + errorCode + message
+   2. exception/NotFoundException.java   404
+   3. exception/ForbiddenException.java  403
+   4. exception/ConflictException.java   409
+   5. service/TransactionRunner.java     EM + transaction lifecycle: call / execute
+   6. service/PagedResult.java           record PagedResult<T>(List<T> items, long totalItems)
+   7. service/ListingService.java        create / getById / search / findMine / update / delete
+
+ File edited:
+   repository/ListingRepository.java    + findByIdWithDetails, + countByHost,
+                                        + import java.util.Optional, + import java.util.UUID
+                                        (35 insertions, 0 deletions — nothing else touched)
+
+ No changes to domain/**, pom.xml, or persistence.xml. No new dependencies
+ (Hibernate.initialize comes from hibernate-core, present since Task 01).
+
+ --------------------------------------------------------------------------------
+  CLASS / FUNCTION DEFINITIONS — TASK 03
+ --------------------------------------------------------------------------------
+
+ 1) exception.ApiException  [src/main/java/com/backend/exception/ApiException.java]
+    Purpose: One base for every spec-defined failure a service throws. Carries
+             exactly the three fields a future JAX-RS ExceptionMapper needs to
+             build the §1 error envelope, with zero translation logic.
+
+    - public abstract class ApiException extends RuntimeException
+      Abstract on purpose: there is no such thing as throwing one without a
+      status, so the base can never be instantiated directly.
+
+    Fields (both final, set once in the ctor):
+      private final int status
+      private final String errorCode
+
+    - protected ApiException(int status, String errorCode, String message)
+      Calls super(message). Status is supplied by the concrete subclass only.
+
+    - public int getStatus() / public String getErrorCode()
+      Read verbatim by whatever eventually catches it.
+
+ 2) exception.NotFoundException  [NotFoundException.java]
+    - public NotFoundException(String errorCode, String message) -> super(404, ...)
+    Codes used: LISTING_NOT_FOUND
+
+ 3) exception.ForbiddenException  [ForbiddenException.java]
+    - public ForbiddenException(String errorCode, String message) -> super(403, ...)
+    Codes used: EMAIL_NOT_VERIFIED, NOT_OWNER
+
+ 4) exception.ConflictException  [ConflictException.java]
+    - public ConflictException(String errorCode, String message) -> super(409, ...)
+    Codes used: CANNOT_DELETE_WITH_ACTIVE_BOOKINGS
+
+    Note: each concrete type hardcodes its own status. No constructor anywhere
+    accepts a status parameter, so the status can't drift per call site.
+
+    No ValidationException/400 — deliberately absent. The @NotBlank/@Email/
+    @Positive annotations from Task 01 fire at the JAX-RS boundary via @Valid
+    once that boundary exists (spec §12); duplicating them here would be a
+    second, weaker copy of the same rule.
+
+ 5) service.TransactionRunner  [src/main/java/com/backend/service/TransactionRunner.java]
+    Purpose: The one place EntityManager + EntityTransaction lifecycle lives.
+             Written once instead of in all six service methods.
+
+    - public final class TransactionRunner
+      final + private ctor: pure static utility, never instantiated.
+
+    - @FunctionalInterface public interface Work<T> { T run(EntityManager em); }
+      Declares no checked exception. Nothing in the EntityManager, repository,
+      or exception APIs here throws one, so there is nothing to wrap.
+
+    - @FunctionalInterface public interface VoidWork { void run(EntityManager em); }
+      For methods with nothing to return (delete).
+
+    - public static <T> T call(Work<T> work)
+      em = JpaUtil.createEntityManager(); tx = em.getTransaction();
+      try { tx.begin(); result = work.run(em); tx.commit(); return result; }
+      catch (RuntimeException e) { if (tx.isActive()) tx.rollback(); throw e; }
+      finally { em.close(); }
+      An ApiException thrown inside the lambda is a RuntimeException: it is
+      caught, rolls back, and is rethrown unchanged all the way out.
+
+    - public static void execute(VoidWork work)
+      call(em -> { work.run(em); return null; }) — same boundary, result discarded.
+
+ 6) service.PagedResult  [src/main/java/com/backend/service/PagedResult.java]
+    - public record PagedResult<T>(List<T> items, long totalItems)
+      Generic, not Listing-specific. The §1 paginated envelope is
+      (items, page, size, totalItems, totalPages) and is reused by nearly every
+      collection endpoint in the spec. A service computes the two values that
+      need the database; page/size are the caller's own, totalPages is pure
+      arithmetic, so the eventual envelope builder does that once, generically,
+      instead of every service repeating it.
+
+ 7) service.ListingService  [src/main/java/com/backend/service/ListingService.java]
+    Purpose: Business rules for all six §6 Listings endpoints. Plain stateless
+             class, no constructor, no fields, constructed with `new`.
+
+    - public Listing create(User host, Listing listing)          — POST /listings
+      1. if (!host.isVerified()) throw ForbiddenException("EMAIL_NOT_VERIFIED", ...)
+      2. listing.setHost(host); listing.setStatus(ListingStatus.ACTIVE)
+      3. return TransactionRunner.call(em -> new ListingRepository(em).create(listing));
+      Steps 1-2 are plain field access/mutation on an object already in memory
+      and happen BEFORE any transaction opens. The transaction wraps only persist.
+
+    - public Listing getById(UUID id)                            — GET /listings/{id}
+      TransactionRunner.call: findByIdWithDetails(id).orElseThrow(NOT_FOUND),
+      then Hibernate.initialize(listing.getActivities()), return the Listing.
+      The entity is handed back after the tx commits and the EM closes, so every
+      association a caller might read has to already be loaded. activities is
+      initialized explicitly rather than fetch-joined (see MultipleBagFetchException
+      note in findByIdWithDetails). PUT reuses this exact response shape.
+
+    - public PagedResult<Listing> search(String city, BigDecimal minPrice,
+        BigDecimal maxPrice, Boolean mealsIncluded, Pageable pageable)  — GET /listings
+      TransactionRunner.call: repo.search(...) for the page, repo.countSearch(...)
+      for the total, wrapped in PagedResult. ACTIVE-only is enforced in the
+      repository, not here. All four filters optional (null = no filter).
+
+    - public PagedResult<Listing> findMine(User host, Pageable pageable) — GET /listings/mine
+      TransactionRunner.call: repo.findByHost(host, pageable) + repo.countByHost(host)
+      -> PagedResult. No status filter — the host sees ACTIVE, HIDDEN and REMOVED.
+
+    - public Listing update(User host, UUID listingId, Listing changes) — PUT /listings/{id}
+      TransactionRunner.call: findByIdWithDetails -> orElseThrow(NOT_FOUND) ->
+      requireOwner(existing, host) -> copy the 9 editable fields (title,
+      description, city, address, pricePerNight, currency, mealsIncluded,
+      activities) -> repo.update(existing).
+      `changes` is a partially-populated detached Listing used purely as a
+      carrier for incoming values; it is never persisted. host, status, id and
+      createdAt are NOT copyable — status changes only via delete (REMOVED) or
+      the §10 block side effect (HIDDEN).
+      No Hibernate.initialize on activities: Listing.setActivities() calls
+      clear() first, and that clear() is itself what forces Hibernate to load
+      the about-to-be-discarded old collection — which is fine, we are still
+      inside the transaction.
+
+    - public void delete(User host, UUID listingId)              — DELETE /listings/{id}
+      TransactionRunner.execute: findById -> orElseThrow(NOT_FOUND) ->
+      requireOwner -> if (new BookingRepository(em).existsActiveBookingForListing(listing))
+      throw ConflictException("CANNOT_DELETE_WITH_ACTIVE_BOOKINGS") ->
+      listing.setStatus(ListingStatus.REMOVED); listingRepo.update(listing).
+      Soft delete only. Never em.remove.
+      Uses the cheap findById, not findByIdWithDetails: the only association it
+      touches is listing.getHost().getId(), and Hibernate embeds the FK id in a
+      lazy @ManyToOne proxy without a query, so no load is needed. Nothing is
+      returned to a caller either, so there is no association left uninitialized.
+
+    - private void requireOwner(Listing listing, User host)
+      if (!listing.getHost().getId().equals(host.getId()))
+          throw new ForbiddenException("NOT_OWNER", "You do not own this listing")
+      Shared verbatim by update and delete rather than duplicated.
+
+ 8) repository.ListingRepository — 2 additive methods  [ListingRepository.java]
+    Serves: getById (findByIdWithDetails), update (findByIdWithDetails),
+            findMine (countByHost)
+
+    - public Optional<Listing> findByIdWithDetails(UUID id) : Optional<Listing>
+      JPQL: "SELECT DISTINCT l FROM Listing l JOIN FETCH l.host LEFT JOIN FETCH l.photos
+             WHERE l.id = :id" -> getResultStream().findFirst()
+      Needed because getById and update both return a Listing to a caller after
+      the transaction that loaded it has closed, and §6's GET/PUT response
+      includes photos[] and a host summary block. A lazy proxy would throw on
+      first touch outside a live session.
+      host = inner JOIN FETCH (always present, never null).
+      photos = LEFT JOIN FETCH (a listing may legitimately have zero).
+      DISTINCT is required: fetch-joining a collection repeats the parent row
+      once per child row, so a 3-photo listing would otherwise appear 3 times.
+      activities is deliberately NOT fetch-joined — photos is a List (a "bag"),
+      and fetch-joining two collections in one query risks
+      MultipleBagFetchException. ListingService.getById initializes it separately.
+
+    - public long countByHost(User host) : long
+      JPQL COUNT: "SELECT COUNT(l) FROM Listing l WHERE l.host = :host" -> getSingleResult()
+      Count-side counterpart to the existing findByHost. GET /listings/mine is
+      paginated exactly like GET /listings, so it needs a totalItems just the
+      way the existing search/countSearch pair already provides one.
+
+    New imports added: java.util.Optional, java.util.UUID (countByHost needs nothing new).
+
+ --------------------------------------------------------------------------------
+  CONVENTIONS ESTABLISHED IN TASK 03
+ --------------------------------------------------------------------------------
+   1) Services take resolved domain objects, not tokens (§3.1)
+      Every method that needs to know the caller takes an already-loaded
+      `User`. There is no Auth layer to hand a service a bearer token and none
+      is needed — identifying the caller is upstream work, applying the business
+      rule is not. ListingService.create(User, Listing) is fully callable today;
+      the only missing piece is something that resolves a JWT into that User.
+
+   2) Every public method goes through TransactionRunner (§3.2)
+      No service method calls JpaUtil.createEntityManager(), and no repository
+      is ever constructed outside a TransactionRunner lambda. A repository needs
+      an EntityManager bound to one specific unit of work (Task 02 §3.1) — and
+      that unit of work is exactly what TransactionRunner creates and tears down.
+
+   3) Services are stateless (§3.3)
+      No constructor, no fields. Each method builds the repositories it needs
+      fresh from the `em` its lambda receives. This is also why no wiring is
+      needed yet: @ApplicationScoped on a fieldless class is a one-line change
+      when CDI shows up, not a redesign.
+
+   4) Failures throw, they don't return a code (§3.4)
+      Never null, never a boolean, never a custom result wrapper. Each exception
+      carries the exact status + machine-readable error code the §1 envelope
+      needs, so the eventual mapper is pure passthrough.
+
+   5) Two ways to look up a Listing, deliberately (§3.5)
+      findById (cheap, no joins) for delete, which returns nothing and only
+      needs the host's id. findByIdWithDetails (host + photos fetched) for
+      getById and update, which hand a Listing back to their caller.
+
+ --------------------------------------------------------------------------------
+  DESIGN PATTERNS USED IN TASK 03
+ --------------------------------------------------------------------------------
+   6) Facade / Template Method (TransactionRunner)
+      Definition: A single class owns a multi-step algorithm; callers supply
+      only the varying step via a callback.
+      Applied: TransactionRunner.call(Work<T>) / execute(VoidWork) own the
+               fixed sequence (create EM -> begin -> run -> commit | rollback ->
+               close). The Work/VoidWork functional interfaces are the varying
+               step, supplied as a lambda by each service method. Rollback and
+               close are inherited by every caller for free and cannot be
+               forgotten at a call site.
+      Why: Six service methods all need the same envelope. Written once, the
+           transaction boundary is now impossible to get subtly wrong in one
+           method and right in another.
+
+   7) Null Object / Sentinel via Exception-as-Control-Flow (ApiException hierarchy)
+      Definition: A condition that is a normal, expected outcome of the domain
+      (not found, not owner, conflict) is signalled by a typed object carrying
+      the data needed to respond, rather than by a return value every caller
+      must remember to check.
+      Applied: The 4-class ApiException tree. Each instance carries status +
+      errorCode + message, so the failure travels intact from the throw site to
+      whatever catches it without any intermediate branching.
+      Why: Spec §1 requires a single error envelope. Encoding the response data
+           in the exception removes the possibility of a call site inventing its
+           own error shape, and makes the business rule (this host doesn't own
+           this listing) legible in the source.
+
+   8) Inversion of Control (Work<T> callback)
+      Definition: A component's control flow is inverted — it calls back into
+      code it was handed instead of hardcoding a collaborator.
+      Applied: TransactionRunner has no knowledge of any repository. It hands
+               an EntityManager to a lambda and waits.
+      Why: Keeps the transaction infrastructure unaware of the domain, so it
+           stays reusable for BookingService, MessageService, AuthService, etc.
+           unchanged.
+
+   Patterns deliberately NOT introduced:
+    - Service Locator / static singleton service instance — ListingService is
+      `new`'d like Task 02's repositories; CDI comes later as a one-line change.
+    - Result/Wrapper return type (e.g. a Result<T> instead of PagedResult for
+      errors) — would duplicate what the exception tree already expresses, and
+      would force every call site into a match/if.
+
+ --------------------------------------------------------------------------------
+  DEFERRED (§8) — STILL NOT BUILT
+ --------------------------------------------------------------------------------
+   - Exception mapper: nothing yet catches ApiException and turns
+     getStatus()/getErrorCode()/getMessage() into the §1 JSON envelope. That is
+     a JAX-RS ExceptionMapper and needs the Resource layer to exist first.
+   - DTOs for Listing: create/update take a partially-populated Listing entity
+     as their "changes" input rather than a request DTO, and return the entity
+     rather than a response DTO. When the Resource layer arrives it maps DTO ->
+     Listing before calling in and Listing -> DTO after. ListingService does not
+     change either way.
+   - Photo endpoints: POST/DELETE /listings/{id}/photos need a storage decision
+     (spec §14.3) this project has not made.
+
+   Also still deferred from earlier tasks, unchanged by this one:
+   - Auth/JWT: no token parsing, no interceptor, no @RolesAllowed. Every service
+     method takes an already-resolved User.
+   - Booking/Message/Report/User/Auth services: not attempted; Task 03 covers
+     Listings only.
+   - Booking auto-reject workflow: BookingRepository.findOverlapping (Task 02)
+     is the query; the looping/rejecting orchestration is still Service work,
+     for the Booking task.
+   - GET /messages/conversations: still needs a DTO projection.
+   - CDI wiring (@ApplicationScoped / @Inject / @Produces): still absent.
+   - Page size clamping (max 100): Task 02 left this to the Service/Resource
+     layer; this task passes Pageable through unchanged rather than clamping in
+     search/findMine, so it is still an unwritten Resource-layer concern.
+
+ --------------------------------------------------------------------------------
+  VERIFICATION
+ --------------------------------------------------------------------------------
+   - 7 new files, 1 existing file edited, exactly as §2's manifest.
+   - ListingRepository.java diff: 35 insertions, 0 deletions — 2 imports, 2 methods.
+   - No domain/** change, no pom.xml change, no persistence.xml change, no new dependency.
+   - mvn -q -DskipTests compile -> BUILD SUCCESS (no errors, no warnings).
+   - grep "getTransaction" src/main/java/com/backend/service/ -> exactly 1 file,
+     TransactionRunner.java. No service method touches a transaction directly.
+   - grep "javax" over exception/ and service/ -> 0 hits (Jakarta imports only).
+   - ApiException is abstract; no constructor anywhere accepts a status parameter.
+   - Every ListingService method that reads or writes data does so only inside a
+     TransactionRunner.call/execute lambda. The only code outside one is
+     create()'s isVerified() guard and its setHost/setStatus, which is correct —
+     those are plain field operations on an in-memory object needing no EM.
+
+   Manual smoke (needs a persisted verified User first, since there is no Auth yet
+   to hand ListingService a caller — same shape as PersistenceSmokeCheck):
+     User host = new User(); host.setEmail("h@x.com"); host.setPasswordHash("x");
+     host.setFullName("H"); host.setRole(UserRole.HOST); host.setVerified(true);
+     TransactionRunner.execute(em -> new UserRepository(em).create(host));
+     Listing l = new Listing(); l.setTitle("Riad"); l.setCity("Marrakesh");
+     l.setPricePerNight(new BigDecimal("120.00"));
+     ListingService svc = new ListingService();
+     Listing saved = svc.create(host, l);
+     svc.getById(saved.getId());                       // host + photos + activities readable
+     svc.search("Marrakesh", null, null, null, new Pageable(0, 20));
+     svc.findMine(host, new Pageable(0, 20));          // totalItems == 1
+     svc.delete(host, saved.getId());                  // status -> REMOVED
+   NOT BUILT: no such script was added to the repo — Task 03 §0 excludes tests.
+   Say the word and a PersistenceSmokeCheck-shaped ListingServiceSmokeCheck
+   can be added.
+
+ --------------------------------------------------------------------------------
+  AMBIGUITIES FOUND IN API-SpecIFICATION.md §6 AND HOW THEY WERE RESOLVED
+ --------------------------------------------------------------------------------
+   (Note: API-Specification.md itself is not in the repo — these are read off the
+    §6 excerpts quoted inside TASK-03.md, so treat them as "worth confirming"
+    rather than as claims about the spec text.)
+
+   1. §6 shows "a host summary block" for GET /listings/{id} but never lists
+      which host fields it contains.
+      Resolution: did not guess. getById returns the whole Listing with host
+      eagerly fetched; picking a subset of host fields is a DTO decision, and
+      DTOs are explicitly out of scope (§8). The Resource layer narrows it.
+
+   2. §6 does not say whether GET /listings/{id} should 404 for a REMOVED or
+      HIDDEN listing. search() is ACTIVE-only, so those listings already vanish
+      from the public list, but getById has no status filter at all and will
+      return one to any caller who knows the id.
+      Resolution: followed TASK-03 §7 literally — no status filter. This is the
+      one behaviour I'd most want a second opinion on before the Resource layer
+      ships: probably non-ACTIVE listings should be visible to the owner and
+      404 for everyone else, which is a check the service or the resource will
+      need. Flagged, not silently changed.
+
+   3. §6 does not say whether PUT /listings/{id} is allowed to change status.
+      Resolution: treated as no. status, host, id and createdAt are not among
+      the 9 fields update() copies; status is only ever written by delete()
+      (REMOVED) or the §10 block side effect (HIDDEN). That keeps a host from
+      un-hiding a listing removed by an admin by round-tripping PUT.
+
+   4. §6's paginated envelope is (items, page, size, totalItems, totalPages) but
+      PagedResult carries only items + totalItems.
+      Resolution: intentional. page and size are the caller's own inputs, and
+      totalPages is arithmetic on totalItems/size — neither needs the database,
+      so neither belongs in a repository-backed result. The envelope builder
+      will add them once, generically.
+
+   5. §6's PUT semantics ("full replace") vs. a partial PATCH.
+      Resolution: PUT is implemented as a full replace of the editable fields,
+      exactly as TASK-03 §7 specifies. A PATCH would need null-vs-absent
+      distinction, which a partially-populated entity cannot express; that needs
+      a DTO, so it stays out of scope.
+
+ --------------------------------------------------------------------------------
+  REPORT BACK (per TASK-03 §10)
+ --------------------------------------------------------------------------------
+   1. Files: exception/{ApiException, NotFoundException, ForbiddenException,
+      ConflictException}.java, service/{TransactionRunner, PagedResult,
+      ListingService}.java. Repository additions: ListingRepository
+      .findByIdWithDetails(UUID) and .countByHost(User).
+   2. countByHost is understood as a Task 02 miss being corrected now, not a new
+      requirement of this task. Task 02 added findByHost without its count-side
+      counterpart, the same way it already paired search with countSearch;
+      building findMine surfaced the gap. Nothing in Task 03's own scope asked
+      for a new count query — it asked for the missing half of an existing pair.
+   3. §8's three deferred items are all still deferred and all still blocked on
+      the same prerequisite (a Resource layer / a storage decision): exception
+      mapper, Listing DTOs, photo endpoints. Nothing from §0 leaked in — no
+      Auth, no JAX-RS, no CDI, no ValidationException, no Booking/Message/
+      Report/User/Auth service, no tests, no pom or persistence.xml change.
+
+  Suggested commit:
+   feat: add transaction runner, API exceptions, and ListingService
+
+   TransactionRunner wraps EntityManager+transaction lifecycle once;
+   every ListingService method goes through it, never touches
+   EntityManager directly. ApiException + NotFound/Forbidden/Conflict
+   give services a way to signal spec-defined error conditions without
+   a Resource layer to catch them yet. PagedResult<T> is shared,
+   reusable pagination-count carrier. ListingRepository gains
+   findByIdWithDetails and countByHost (Task 02 gap). No DTOs, no
+   JAX-RS, no CDI, no Auth yet — ListingService takes an already-
+   resolved User and plain entities.
+================================================================================
+
+
+================================================================================
+ TASK 04 — Auth: Register, Login, Refresh, Logout
+ DarCom Co-Hosting Platform (darcom-backend)
+ Stack: Java 21 · Jakarta EE 10 · Hibernate 6.4.4 · PostgreSQL
+        + at.favre.lib:bcrypt 0.10.2, io.jsonwebtoken:jjwt-{api,impl,jackson} 0.13.0
+================================================================================
+
+ Goal: The first service that answers "who is calling" — the thing Task 03
+       explicitly deferred. AuthService covers the four core §4 endpoints
+       (register/login/refresh/logout) plus the crypto to back them. Issuing
+       only: nothing here turns a bearer token back into a User yet.
+
+ Deliverable: 6 new files, 4 new pom.xml dependencies, 1 new .env variable.
+              No existing .java file modified. No tests (§0).
+
+ Files created (src/main/java/com/backend):
+   1. exception/UnauthorizedException.java  401 — first 401 this codebase needed
+   2. security/PasswordHasher.java          bcrypt, cost 12
+   3. security/RefreshTokenHasher.java      SecureRandom gen + SHA-256 hash
+   4. security/JwtService.java              HS-signed access tokens, 15-min TTL
+   5. service/AuthResult.java                record(accessToken, refreshToken, user)
+   6. service/AuthService.java               register / login / refresh / logout
+
+ Files edited: pom.xml only (+4 dependencies, §1.1). .env only (+JWT_SECRET, §1.2).
+ No change to domain/**, persistence/**, repository/**, or persistence.xml.
+
+ New dependencies (pom.xml):
+   at.favre.lib:bcrypt 0.10.2 (compile) — hand-rolling PBKDF2 with the JDK's
+     own salt/iteration logic is exactly the kind of thing that's easy to get
+     subtly wrong; at.favre.lib over jbcrypt = maintained, char[]-based API,
+     higher cost ceiling.
+   io.jsonwebtoken:jjwt-api 0.13.0 (compile) — the only artifact code is written
+     against; jjwt-impl + jjwt-jackson 0.13.0 are runtime scope per JJWT's own
+     convention (impl internals aren't semver-stable). jjwt-jackson reuses the
+     jackson-databind already on the classpath.
+
+  New secret (.env, gitignored — never committed):
+   JWT_SECRET=<64 random bytes, base64> — generated with a CSPRNG
+   (System.Security.Cryptography.RandomNumberGenerator), 88 base64 chars.
+   Decodes to 64 bytes, well over HS256's 32-byte minimum, so JJWT's
+   single-arg signWith picks HS512 automatically with no extra code.
+
+ --------------------------------------------------------------------------------
+  PURPOSE — WHAT TASK 04 IS FOR, AND WHY IT FOLLOWS 01, 02 AND 03
+ --------------------------------------------------------------------------------
+
+  THE SHORT VERSION
+    Tasks 01–03 built a system that can store users and enforce rules about
+    them — but with no way to tell users apart at the door. Every service
+    method takes "an already-resolved User" (Task 03 §3.1) and until now that
+    User could only be hand-constructed. Task 04 builds the front door: the
+    thing that turns a stranger with an email and a password into that resolved
+    User, and hands them two tokens proving it. It is only half a front door
+    on purpose — it issues tokens but nothing reads one back yet, because the
+    place that needs to read them (a request filter in front of protected
+    endpoints) doesn't exist until the Resource layer does.
+
+  WHERE THE FOUR TASKS SIT IN THE SPEC'S LAYERING (§1: Resource -> Service -> Repository)
+    +------------------------------------------------------------------+
+    |  api/         <-- STILL NOT BUILT (Task 05+)  HTTP, DTOs, filters, |
+    |                 the only layer that will ever parse a bearer token |
+    |                 back into a User, @Valid, exception mappers        |
+    +------------------------------------------------------------------+
+    |  service/     <-- THIS TASK JOINS IT.  AuthService next to         |
+    |                 ListingService. Same TransactionRunner, same        |
+    |                 throw-don't-return rule, same stateless `new` shape.|
+    |                 Knows "are these credentials valid?" Knows nothing  |
+    |                 about HTTP.                                        |
+    +------------------------------------------------------------------+
+    |  security/    <-- THIS TASK CREATES IT.  Pure functions of crypto: |
+    |                 hash a password, mint a token, hash a token. No EM, |
+    |                 no transaction, no repository — callable from       |
+    |                 anywhere, testable without a database.             |
+    +------------------------------------------------------------------+
+    |  repository/  <-- TASKS 02/03.  Untouched this time — and that is  |
+    |                 the point: auth needed zero new queries. Every      |
+    |                 lookup AuthService performs already existed.       |
+    +------------------------------------------------------------------+
+    |  domain/      <-- TASK 01.  Untouched — User and RefreshToken were  |
+    |                 designed for exactly this task two tasks early.    |
+    +------------------------------------------------------------------+
+    |  persistence/ <-- TASK 02.  Untouched — but its Dotenv pattern is  |
+    |                 reused verbatim by JwtService.loadKey().           |
+    +------------------------------------------------------------------+
+
+  WHAT TASK 01 GAVE TASK 04 (designed for it two tasks early)
+    - The User entity, whose every security-relevant field gets used: email
+      (unique — the login key and the register duplicate check), passwordHash
+      (255 chars — a bcrypt hash is 60, fits with room), role (the INVALID_ROLE
+      guard and the JWT "role" claim), verified/blocked (register forces both
+      false; login refuses blocked). TASK-04 §0 forbids touching domain/** —
+      AuthService never adds a field or annotation. The model was already the
+      contract; this task just finally exercises it.
+    - The RefreshToken entity, which is the entire reason RefreshTokenHasher
+      exists: tokenHash (unique, 512 — stores a SHA-256 hex, never the raw
+      value), expiresAt + isExpired() (the reject-and-delete path in refresh).
+      Task 01's "stores hash never raw" comment was a promise; Task 04 is the
+      code that keeps it.
+    - UserRole (HOST/VISITOR/ADMIN) — the three-way split that makes "only HOST
+      or VISITOR may self-register" expressible in one line.
+    - Zero collections on User by design (Task 01 §3.9) — which is why
+      AuthResult can safely carry the User past the transaction close with no
+      Hibernate.initialize call, unlike ListingService.getById's Listing.
+
+  WHAT TASK 02 GAVE TASK 04 (used, not modified)
+    - UserRepository.existsByEmail (register's duplicate check) and findByEmail
+      (login's lookup). Both written for "POST /auth/register (duplicate),
+      POST /auth/login" per Task 02's own comments — this task is literally the
+      caller those comments were waiting for.
+    - RefreshTokenRepository.findByTokenHash, deleteByTokenHash, create, and the
+      inherited delete — refresh and logout are composed entirely from them.
+    - The contrast with Task 03 matters: building ListingService exposed two
+      missing repository methods and Task 03 had to add them. Building
+      AuthService exposed zero — Task 02's auth-side repositories were complete.
+      That is why §2's manifest says "no existing .java file edited" while Task
+      03's said one file edited. The asymmetry is evidence Task 02's authors
+      anticipated auth's queries correctly.
+    - The Dotenv pattern from JpaUtil, reused verbatim in JwtService.loadKey() —
+      same library, same load-once shape, same fail-loud philosophy (WeakKeyException
+      here plays the role a bad PU name would play there).
+    - deleteAllExpired(), still uncalled — the deferred cleanup job (§8). Present
+      since Task 02, still waiting for a scheduler.
+
+  WHAT TASK 03 GAVE TASK 04 (the rails it runs on)
+    - TransactionRunner — every AuthService method goes through it, and the
+      rotation guarantee ("delete old + persist new in the SAME transaction")
+      is only expressible because Task 03 separated the boundary from the work.
+      Without it, refresh would be two transactions with a crash window between
+      "old token dead" and "new token alive."
+    - The exception family and its extension pattern. UnauthorizedException is
+      added exactly the way Task 03 §6 added repository methods: same package,
+      same shape, hardcoded status, no existing file touched. The 401 slot was
+      empty because nothing before auth could produce "not authenticated" —
+      Listing's failures are all 403/404/409 by nature.
+    - All of §3's conventions via §3.5: stateless service, repos built fresh
+      inside the lambda, failures throw. AuthService introduces no new service
+      convention of its own — §3.1–3.4 are security rules, not service plumbing.
+    - The consumer side of auth itself. Task 03 §3.1 said "every method takes an
+      already-resolved User... the only thing missing is something upstream that
+      resolves a JWT into that User." Task 04 builds the producer side — but
+      deliberately only the issuing half. The resolving half (verify/parse) is
+      still upstream work, now precisely scoped: it waits on the Resource layer,
+      not on any more service code.
+    - The cross-task interaction that proves the layering works: register()
+      sets verified=false, and ListingService.create() rejects unverified hosts
+      with EMAIL_NOT_VERIFIED. Two tasks written weeks apart compose with no
+      glue code — the Task 03 guard was waiting for exactly the flag Task 04
+      now writes.
+    - PagedResult as precedent for AuthResult: small shared carrier records
+      that keep multi-value returns typed without inventing a wrapper framework.
+
+  WHAT TASK 04 ADDS BACK TO THE PILE
+    - PasswordHasher: the project's only password code, behind a two-method API
+      that makes the wrong thing (comparing strings) unexpressible at call sites.
+    - JwtService: the issuing half of token auth, with the key discipline
+      (eager load, fail loud on weak keys, minimal claims, strongest-HMAC
+      selection) baked in so no later caller can get it wrong.
+    - RefreshTokenHasher: the split-knowledge half — raw for the wire, hash for
+      the disk — with the fast-hash/slow-hash choice documented at the call site.
+    - AuthService: the first code in the project that mints identity. Every
+      future protected endpoint's filter will resolve against exactly the rows
+      and tokens this service writes.
+    - UnauthorizedException: completes the status family (401/403/404/409) —
+      there is now no HTTP error class the service layer needs that it lacks
+      short of the 400 that belongs to @Valid at the boundary.
+
+  THE PROBLEM THIS TASK HAD TO SOLVE FIRST
+    A token system has two halves — minting and checking — and the natural
+    instinct is to build both. But checking a bearer token means turning it
+    into a User on every request, which needs a home (a JAX-RS filter in front
+    of protected endpoints) that cannot exist before the Resource layer. So
+    Task 04 issues only, and JwtService has no verify/parse method — the same
+    reasoning as Task 03's "no fake auth context": a verification method with
+    no caller would be speculative code rotting until Task 05+, or worse, two
+    competing verification paths when the real one arrives. The task says what
+    the follow-up is (§8: "a small, natural follow-up when that task arrives")
+    instead of pre-building it.
+
+  WHAT THIS TASK DELIBERATELY DID *NOT* DO
+    It stopped at issuing. No verify/parse, no email verification or password
+    reset (no provider chosen — same blocker as Task 03's photos), no rate
+    limiting (called out as a real production gap, §0/§8, not silently absent),
+    no DTOs, no resources, no mapper, no CDI, no tests. The rate-limiting note
+    deserves emphasis: it is the first deferred item in this project that is a
+    live vulnerability rather than missing functionality, and the task marks it
+    as such instead of burying it.
+
+ --------------------------------------------------------------------------------
+  TASK 04 CONVENTIONS — AND WHERE EACH ONE CAME FROM
+ --------------------------------------------------------------------------------
+
+   Convention                        Origin            Why it exists
+   --------------------------------- ----------------- ---------------------------------
+   Passwords never compared          TASK-04 §3.1      string comparison of secrets
+   directly; always matches()                         is how timing leaks and
+                                                       plaintext handling creep in
+   Client sees raw token, DB only   Task 01           RefreshToken.tokenHash was
+   its SHA-256 hash (split           tokenHash design  built for exactly this split;
+   knowledge)                        + §3.2            a table leak must yield zero
+                                                       usable sessions
+   Refresh = rotation in one tx,    §3.3 + Task 03    bounds a leaked token's life
+   never reuse                       TransactionRunner to "until the holder's next
+                                                       refresh"; same-tx or the
+                                                       guarantee is hollow
+   Login: identical error for        §3.4              the endpoint must not leak
+   unknown email vs wrong                             which emails are registered
+   password
+   ADMIN cannot self-register,      §7 (service, not  privilege-escalation guard on
+   enforced in service               Bean Validation)  a public endpoint must not
+                                                       depend on a DTO annotation
+                                                       someone may forget
+   Everything through                Task 03 §3.2      the boundary already existed;
+   TransactionRunner                 via §3.5          auth just follows it
+   Stateless, `new` it, typed       Task 03 §3.3–3.4  no new service plumbing was
+   exceptions only                   via §3.5          needed — only security rules
+   register() returns User, no      §7 literal        flagged for confirmation (§10):
+   tokens                                             auto-login reshapes the future
+                                                       register DTO, settle before it
+
+ --------------------------------------------------------------------------------
+
+
+ 1) exception.UnauthorizedException  [exception/UnauthorizedException.java]
+    - public UnauthorizedException(String errorCode, String message) -> super(401, ...)
+    Same shape as Task 03's other three, same package. None of Listing's errors
+    needed a 401 (NOT_OWNER is 403, LISTING_NOT_FOUND is 404, the delete guard
+    is 409) — auth is the first thing that genuinely does: wrong credentials
+    and a bad refresh token are "you are not authenticated," not "you're
+    authenticated but not allowed."
+    Codes used: INVALID_CREDENTIALS, INVALID_REFRESH_TOKEN
+
+ 2) security.PasswordHasher  [security/PasswordHasher.java]
+    Purpose: The only place a raw password is ever touched — and even here it
+             is never stored, logged, or returned. char[]-based API so the raw
+             password doesn't linger as an immutable String.
+
+    - private static final int COST = 12  (2^12 rounds; revisit upward as hardware improves)
+    - public static String hash(String rawPassword)
+      BCrypt.withDefaults().hashToString(COST, rawPassword.toCharArray())
+    - public static boolean matches(String rawPassword, String hash)
+      BCrypt.verifyer().verify(rawPassword.toCharArray(), hash).verified
+    Known bcrypt trap (worth knowing, not a concern): the algorithm only looks
+    at the first 72 bytes — anything beyond is silently ignored in both hash
+    and verify. Only matters if register ever gets a max-length rule.
+
+ 3) security.RefreshTokenHasher  [security/RefreshTokenHasher.java]
+    Purpose: Raw token for the client, hash for the DB — the split Task 01
+             built RefreshToken.tokenHash for. If the table leaked, no row in
+             it is usable as a bearer token.
+
+    - private static final SecureRandom RANDOM = new SecureRandom()
+    - public static String generateRaw() — 64 SecureRandom bytes, base64url, no padding.
+      What goes to the client. Never stored as-is.
+    - public static String hash(String rawToken) — SHA-256, hex-encoded. What
+      RefreshToken.tokenHash actually stores. SHA-256-not-bcrypt on purpose:
+      bcrypt's slowness is the point for low-entropy human passwords; a refresh
+      token is already 64 unguessable bytes, so an adaptive hash buys nothing
+      and only costs CPU on every refresh/logout. (NoSuchAlgorithmException is
+      wrapped in IllegalStateException but can never fire — SHA-256 is mandatory
+      on every JVM per the JCA spec.)
+
+ 4) security.JwtService  [security/JwtService.java]
+    Purpose: Issues signed access tokens. Nothing parses one back yet — that
+             belongs to whatever resolves a bearer token into a User, which
+             doesn't exist until the Resource layer does (§8).
+
+    - private static final Duration ACCESS_TOKEN_TTL = Duration.ofMinutes(15)
+    - private static final SecretKey KEY = loadKey() — static-eager-init, same
+      shape as JpaUtil (Task 02): one key, loaded once at class-load. If
+      JWT_SECRET decodes to <32 bytes, Keys.hmacShaKeyFor throws WeakKeyException
+      immediately — loud failure at first touch, never a silently weak key.
+    - private static SecretKey loadKey() — Dotenv JWT_SECRET -> BASE64 decode ->
+      Keys.hmacShaKeyFor. Same Dotenv pattern JpaUtil uses.
+    - public static String issueAccessToken(User user)
+      sub = user id, claim "role" = role name, iat + 15-min exp,
+      .signWith(KEY).compact(). Single-arg signWith lets JJWT pick the strongest
+      HMAC the key qualifies for (HS512 for our 64-byte key) — hardcoding HS256
+      would throw away strength for nothing.
+      Deliberately minimal claims: the payload is base64, not encrypted — email,
+      name, phone stay out; a caller needing them looks up by the resolved id.
+
+ 5) service.AuthResult  [service/AuthResult.java]
+    - public record AuthResult(String accessToken, String refreshToken, User user)
+    The shape login and refresh both return. `user` is safe to read after the
+    transaction closes — User has no associations of its own (Task 01: zero
+    collections by design), so once one field is touched in-tx the row is loaded.
+
+ 6) service.AuthService  [service/AuthService.java]
+    Purpose: Business rules for the four §4 endpoints. Stateless, no fields,
+             constructed with `new` — follows Task 03 §3 conventions exactly.
+
+    - public User register(User newUser, String rawPassword)   — POST /auth/register
+      1. Role check BEFORE any transaction (plain field check on an in-memory
+         object — same reason ListingService.create checks isVerified() outside
+         one): HOST or VISITOR only, else ForbiddenException("INVALID_ROLE").
+         Rejecting ADMIN self-registration lives in the service on purpose —
+         it's a privilege-escalation guard on a public unauthenticated endpoint,
+         not a data-shape check, so it isn't left to a @Valid annotation someone
+         could forget later.
+      2. TransactionRunner.call: existsByEmail -> ConflictException
+         ("EMAIL_ALREADY_EXISTS") rather than catching a DB unique violation, so
+         the error is clean instead of a leaked SQL exception.
+      3. setPasswordHash(PasswordHasher.hash(rawPassword)); setVerified(false);
+         setBlocked(false); create. The caller passes a raw password in and a
+         persisted User out — the hash is the only password-derived thing that
+         ever reaches the database.
+      Returns just the created User — NO tokens. See the §10 flag below.
+
+    - public AuthResult login(String email, String rawPassword)  — POST /auth/login
+      TransactionRunner.call: findByEmail -> orElseThrow(Unauthorized,
+      "INVALID_CREDENTIALS"); PasswordHasher.matches else the SAME
+      Unauthorized/INVALID_CREDENTIALS (§3.4 — checked in this order so neither
+      branch leaks whether the email is registered); user.isBlocked ->
+      ForbiddenException("ACCOUNT_BLOCKED"); issue access token + refresh token
+      (persisted hashed via issueRefreshToken); return AuthResult.
+      Note the ordering: blocked is checked AFTER credentials, so a blocked
+      account still can't be distinguished from a bad password without knowing
+      the right one.
+
+    - public AuthResult refresh(String rawRefreshToken)  — POST /auth/refresh
+      TransactionRunner.call: hash the presented token, findByTokenHash ->
+      orElseThrow(Unauthorized, "INVALID_REFRESH_TOKEN"); if expired, DELETE it
+      then throw Unauthorized/INVALID_REFRESH_TOKEN (an expired token is cleaned
+      up as it's rejected); else delete the presented token (rotation: single-use,
+      §3.3) and issue a fresh access + refresh pair. Delete + re-issue happen in
+      the SAME transaction — a crash between them can't leave both valid or
+      neither. A leaked token is only good until the holder's next refresh.
+
+    - public void logout(String rawRefreshToken)  — POST /auth/logout
+      TransactionRunner.execute: hash + deleteByTokenHash. Never throws — an
+      unknown or already-used token ends in the identical state (that token
+      doesn't work), so there's nothing worth reporting.
+
+    - private String issueRefreshToken(EntityManager em, User user)
+      generateRaw -> new RefreshToken(user, hash(raw), now+30d) -> create ->
+      return raw. TTL: 30 days.
+
+    Error codes emitted: INVALID_ROLE (403), EMAIL_ALREADY_EXISTS (409),
+    INVALID_CREDENTIALS (401), ACCOUNT_BLOCKED (403), INVALID_REFRESH_TOKEN (401).
+    Nothing else — no ad-hoc RuntimeException anywhere in the throw paths.
+
+ --------------------------------------------------------------------------------
+  CONVENTIONS — TASK 04 ADDS FOUR, INHERITS THE REST FROM TASK 03
+ --------------------------------------------------------------------------------
+   New (§3.1–3.4):
+   1) Passwords are never compared directly — always PasswordHasher.matches,
+      never .equals on a raw string or a hash.
+   2) Client sees the raw refresh token; the DB only ever sees its hash.
+      One-way SHA-256, no recovery operation exists by design.
+   3) Refresh is rotation, not reuse — presented token deleted + new one issued
+      in the same transaction. Single-use by construction.
+   4) Login never distinguishes "no such account" from "wrong password" —
+      identical INVALID_CREDENTIALS either way, so the endpoint doesn't leak
+      which emails are registered.
+   Inherited (Task 03 §3, §3.5): TransactionRunner for every method, stateless
+   service with repos built fresh in the lambda, typed-exception failures only.
+
+ --------------------------------------------------------------------------------
+  DESIGN PATTERNS USED IN TASK 04
+ --------------------------------------------------------------------------------
+   9) Token Rotation (refresh)
+      Definition: A credential is single-use — presenting it consumes it and
+      mints a successor in the same atomic step.
+      Applied: AuthService.refresh deletes the presented RefreshToken row and
+               persists its replacement inside one TransactionRunner.call.
+      Why: Bounds the blast radius of a leaked token to "until the legitimate
+           holder's next refresh," with no revocation list to maintain.
+
+   10) Hash-Separation / Split Knowledge (refresh tokens)
+      Definition: The bearer value and the stored verifier are different
+      objects; the store alone is insufficient to impersonate.
+      Applied: Raw token (base64url, to the client) vs SHA-256 hex (in
+      RefreshToken.tokenHash). Same idea as password hashing, tuned
+      differently — fast hash because the input already has 512 bits of entropy.
+      Why: A read-only DB leak yields zero usable sessions.
+
+   11) Fail-Closed Static Initializer (JwtService.KEY)
+      Definition: Security-critical configuration is validated eagerly at
+      load time so misconfiguration is impossible to ship silently.
+      Applied: KEY is loaded once at class-load; a short/weak JWT_SECRET throws
+               WeakKeyException on first touch instead of signing weak tokens.
+      Why: Mirrors JpaUtil's eager EMF build — the same "find out loudly at
+           startup, not quietly in production" philosophy Task 02 chose.
+
+   Patterns deliberately NOT introduced:
+    - Strategy/chain for credential checking (password vs token vs OAuth) —
+      two mechanisms, one class, no abstraction needed yet.
+    - Observer/event for "on login" side effects (last-login timestamp, audit
+      log) — no such column or table exists; not inventing one.
+
+ --------------------------------------------------------------------------------
+  DEFERRED (§8) — STILL NOT BUILT
+ --------------------------------------------------------------------------------
+   - JWT verification/parsing. JwtService issues; nothing parses back. Home is
+     whatever resolves a bearer token into a User — doesn't exist until the
+     Resource layer does. Adding verify/parse then is a small follow-up, not
+     speculative work now.
+   - Email verification (verify-email, resend-verification) and forgot/reset
+     password. Both need an email provider decision — same reason photo uploads
+     waited in Task 03. Note: register() sets verified=false unconditionally,
+     so today every self-registered host is unverified and ListingService.create
+     will reject their listings with EMAIL_NOT_VERIFIED until the verify flow
+     exists. That is the intended interaction between the two tasks, not a bug —
+     but it means the verify-email endpoint is now the critical path to a
+     working host flow, not just nice-to-have.
+   - Rate limiting / brute-force protection on login. Explicit gap, not silent:
+     nothing slows repeated wrong-password attempts against a known email.
+   - Expired-refresh-token cleanup. deleteAllExpired() (Task 02) still isn't
+     called from anywhere; rows accumulate for users who log in repeatedly
+     without logging out. Fine at MVP scale; a scheduled job later if it matters.
+   - Also still deferred from earlier tasks, untouched by this one: DTOs, JAX-RS
+     resources, exception mapper, CDI, photo endpoints, tests, Booking/Message/
+     Report/User services, booking auto-reject, conversations query, page-size
+     clamping.
+
+ --------------------------------------------------------------------------------
+  VERIFICATION
+ --------------------------------------------------------------------------------
+   - 6 new files, no existing .java file modified — matches §2's manifest.
+   - pom.xml: exactly the 4 additions from §1.1 (bcrypt compile; jjwt-api
+     compile; jjwt-impl + jjwt-jackson runtime). .env: exactly the 1 addition
+     from §1.2 (JWT_SECRET, 64 CSPRNG bytes, base64). .env is gitignored, so the
+     secret is local-only and never committed.
+   - No domain/persistence/repository/persistence.xml change, no new change to
+     any Task 03 file.
+   - mvn -q -DskipTests compile -> BUILD SUCCESS.
+   - grep "getTransaction" service/ -> exactly 1 file, TransactionRunner.java.
+   - Every throw in AuthService is Forbidden/Conflict/Unauthorized (5x `throw new`
+     + 1x orElseThrow) — no ad-hoc RuntimeException.
+   - UnauthorizedException hardcodes 401, matching the Task 03 pattern.
+   - Nothing in security/ or service/ logs, returns, or otherwise exposes a raw
+     password — raw values exist only as method parameters into hash()/matches().
+   - §9.8 vs javax.crypto — READ THIS, IT IS A SPEC BUG, NOT A VIOLATION:
+     `grep -rn "javax\." .../security` returns ONE hit, `import
+     javax.crypto.SecretKey` in JwtService.java. That import is IN THE TASK'S
+     OWN §5.3 VERBATIM CODE and cannot be removed: javax.crypto is JDK-standard
+     JCE (there is no jakarta.crypto — unlike persistence/validation, crypto was
+     never renamed), JJWT 0.13's Keys.hmacShaKeyFor returns exactly that type,
+     and the alternatives are fully-qualified use (same grep hit) or declaring
+     the key as java.security.Key (deviating from the spec to game its own
+     check). Kept spec-verbatim. The check's evident intent — no legacy
+     javax.* *Jakarta EE* imports, consistent with Tasks 01–03 — is satisfied:
+     there are no javax.persistence/validation/annotation imports anywhere new.
+
+   Manual smoke (needs DB up; same TransactionRunner idiom as before):
+     AuthService auth = new AuthService();
+     User u = new User(); u.setEmail("h@x.com"); u.setFullName("H");
+     u.setRole(UserRole.HOST);
+     User saved = auth.register(u, "s3cret-password");   // verified=false
+     AuthResult login = auth.login("h@x.com", "s3cret-password");
+     AuthResult r2 = auth.refresh(login.refreshToken()); // old token now dead
+     auth.logout(r2.refreshToken());                     // idempotent, no throw
+     auth.refresh(login.refreshToken());                 // throws INVALID_REFRESH_TOKEN
+   NOT BUILT: no such script was added — §0 excludes tests. Same offer as Task 03.
+
+ --------------------------------------------------------------------------------
+  AMBIGUITIES FOUND IN API-Specification.md §4 AND HOW THEY WERE RESOLVED
+ --------------------------------------------------------------------------------
+   (Note: API-Specification.md itself is not in the repo — these are read off the
+    §4 behaviour implied by TASK-04-auth.md, so treat as "worth confirming".)
+
+   1. Should register() auto-login (return tokens) or require a separate login?
+      Resolution: followed TASK-04 §7 literally — returns just the User. This is
+      the §10-flagged item: it changes the eventual register response DTO, so
+      confirm against the spec before the Resource layer lands. One-line change
+      here either way (call issueRefreshToken + issueAccessToken and return
+      AuthResult instead of User).
+   2. §4-implied: is there a max password length? bcrypt silently ignores input
+      past 72 bytes. Resolution: no length rule added — realistic passwords never
+      reach it, and inventing a validation rule here would duplicate the @Valid
+      boundary's future job. Flagged for whenever register gets its DTO.
+   3. What should refresh() do with an expired token — reject-and-keep or
+      reject-and-delete? Resolution: delete-then-reject in the same transaction.
+      Keeps the table self-cleaning for the common path and matches the "single
+      use" mental model; the scheduled deleteAllExpired job still covers tokens
+      nobody ever presents again.
+   4. Should logout of an unknown token be an error? Resolution: no — idempotent
+      success. The end state is identical either way, and erroring would let a
+      caller probe which token hashes exist.
+
+ --------------------------------------------------------------------------------
+  REPORT BACK (per TASK-04 §10)
+ --------------------------------------------------------------------------------
+   1. Files: exception/UnauthorizedException.java, security/{PasswordHasher,
+      JwtService, RefreshTokenHasher}.java, service/{AuthResult, AuthService}.java.
+      pom.xml: +4 dependencies exactly as §1.1. .env: +JWT_SECRET exactly as §1.2
+      (gitignored, local-only).
+   2. FLAG FOR CONFIRMATION: register returns just the created User — no
+      access/refresh tokens, so a client must call login separately afterward.
+      Implemented literally per §7, but if the spec actually wants auto-login on
+      register, say so: it's a one-line change here (build the AuthResult the way
+      login does) but it changes what the eventual Resource layer's register
+      response DTO looks like, so cheaper to settle now than after DTOs exist.
+   3. §8's four deferred items are all still deferred, each still blocked on the
+      same missing prerequisite: JWT verification (needs the Resource layer's
+      token-resolution home), email verification + password reset (needs an email
+      provider decision), rate limiting (needs a filter/interceptor home — same
+      layer as JWT verification), expired-token cleanup (needs a scheduler).
+      Nothing from §0 leaked in — no verify/parse method, no email flows, no
+      DTOs, no JAX-RS, no CDI, no rate limiting, no tests.
+   4. Ambiguities: see the four items above; all resolved literally per §7 with
+      the reasoning recorded, none silently changed.
+
+  Suggested commit:
+   feat: add Auth service (register, login, refresh, logout)
+
+   PasswordHasher (bcrypt), JwtService (HS-signed access tokens,
+   issuing only), RefreshTokenHasher (SHA-256, raw token never stored)
+   under com.backend.security. AuthService covers the four core auth
+   endpoints; refresh rotates tokens. UnauthorizedException (401) added
+   to the exception family — the first 401 this codebase has needed.
+   No JWT verification, no email flows, no rate limiting yet.
+================================================================================
+
+
+================================================================================
+ TASK 05 — JAX-RS Bootstrap & Bearer-Token Authentication
+ DarCom Co-Hosting Platform (darcom-backend)
+ Stack: Java 21 · Jakarta EE 10 · Hibernate 6.4.4 · PostgreSQL
+        + Jersey 3.1.1 (jersey-container-servlet, jersey-hk2, jersey-media-json-jackson)
+================================================================================
+
+ Goal: The plumbing every future resource sits on. Until now the project had
+       JAX-RS annotations (from jakarta.jakartaee-api, provided scope) but no
+       JAX-RS *implementation* — on plain Tomcat, nothing could ever serve HTTP.
+       This task adds the engine (Jersey), the request pipeline (bootstrap,
+       bearer filter, SecurityContext, role wiring, error mappers), and the
+       missing token half (JwtService.verify), proven by a throwaway endpoint.
+       No real resources yet — plumbing first, endpoints after it is proven.
+
+ Deliverable: 6 new files, 1 method added to JwtService, 3 pom.xml
+              dependencies. No tests (§0). Two small deploy-driven deviations
+              from the task file's verbatim code (§10.4 below) — both required
+              for the deployment to actually work, both documented.
+
+ Files created (src/main/java/com/backend):
+   1. api/RestApplication.java                 Jersey bootstrap, @ApplicationPath("/api")
+   2. api/ApiExceptionMapper.java              ApiException -> §1 JSON error envelope
+   3. api/GenericExceptionMapper.java          everything else -> 500 envelope (+ fix, §10.4)
+   4. api/security/AuthenticationFilter.java   Bearer -> fresh User -> SecurityContext
+   5. api/security/UserSecurityContext.java    carries the User through the request
+   6. api/diagnostic/WhoAmIResource.java       throwaway proof endpoint (+ fix, §10.4)
+
+ File edited (1): security/JwtService.java
+   + verify(String token) -> UUID, + imports Claims, Jws, UUID.
+   KEY and issueAccessToken unchanged.
+
+ Files edited (infra): pom.xml only (+3 Jersey deps, §1). No persistence.xml
+ change (no new entities). No change to domain/persistence/repository/service.
+
+ New dependencies (pom.xml, all compile scope — plain Tomcat supplies none of this):
+   jersey-container-servlet 3.1.1 — the JAX-RS engine + ServletContainerInitializer
+     that auto-detects @ApplicationPath with zero web.xml (consistent with
+     failOnMissingWebXml=false: no web.xml was ever planned).
+   jersey-hk2 3.1.1 — DI inside Jersey (@Context injection). NOT jersey-cdi2-se:
+     that one boots its own Weld container with its own shutdown hook, a
+     documented source of shutdown conflicts on Tomcat.
+   jersey-media-json-jackson 3.1.1 — JSON (de)serialization, reusing the
+     jackson-databind already on the classpath (Maven mediates the transitive
+     version automatically; no conflict observed).
+
+ STARTING STATE (why this is a *re-implementation*):
+   The 6 api/ files already existed in the repo but the task was never applied:
+   pom.xml had no Jersey deps and JwtService had no verify() — compile was RED
+   with exactly the two blockers WhatToFix.txt names (Jersey classes unresolvable;
+   verify() unresolvable). The existing files were verified byte-for-byte against
+   TASK-05 §§5–8 and matched, so they were kept as-is; the missing pom + verify
+   halves were added. No deletion was needed. (WhatToFix.txt's "FIX FIRST" section
+   describes this exact state and is now resolved — compile is green.)
+
+ --------------------------------------------------------------------------------
+  CLASS / FUNCTION DEFINITIONS — TASK 05
+ --------------------------------------------------------------------------------
+
+ 1) api.RestApplication  [api/RestApplication.java]
+    Purpose: The single registration point for everything JAX-RS. Jersey's
+             ServletContainerInitializer finds it via @ApplicationPath("/api").
+
+    - @ApplicationPath("/api") public class RestApplication extends ResourceConfig
+    - Constructor registers exactly 5 classes: AuthenticationFilter,
+      ApiExceptionMapper, GenericExceptionMapper, RolesAllowedDynamicFeature,
+      WhoAmIResource. Explicit .register() calls, NOT package scanning — same
+      call Task 03 made for persistence.xml's <class> list: on a plain servlet
+      container, explicit beats discovery. Every future resource gets one line here.
+    - Jersey decision (§1, settling WhatToFix.txt's open question): Jersey
+      explicitly, not "pure Jakarta EE app-server managed" — there IS no app
+      server here, only Tomcat, so the EE-managed option would have meant no
+      JAX-RS at all. jersey-hk2 (not cdi2-se) per the Weld-shutdown rationale.
+
+ 2) api.ApiExceptionMapper  [api/ApiExceptionMapper.java]
+    - @Provider implements ExceptionMapper<ApiException>
+    - toResponse: ErrorEnvelope(now, status, errorCode, message, uriInfo.getPath())
+      -> Response.status(status).entity(body).type(JSON). The ONLY place that
+      knows how ApiException becomes JSON — filter-thrown and service-thrown
+      errors look identical on the wire (§3.4).
+    - public record ErrorEnvelope(timestamp, status, error, message, path) —
+      rebuilt from memory of spec §1 as read during Task 01 (see §10.2 flag).
+
+ 3) api.GenericExceptionMapper  [api/GenericExceptionMapper.java]
+    - @Provider implements ExceptionMapper<Throwable>
+    - toResponse: WebApplicationException -> return its own Response untouched
+      (DEPLOY FIX, §10.4); anything else -> log SEVERE with stack trace, return
+      500 INTERNAL_ERROR "Something went wrong". Stack goes to the server log,
+      client sees the generic message — never swapped.
+
+ 4) api.security.AuthenticationFilter  [api/security/AuthenticationFilter.java]
+    Purpose: Turns "a request with a header" into "a request with a User" —
+             the producer side Task 04 left unfinished, now given its home.
+
+    - @Provider @Priority(AUTHENTICATION) implements ContainerRequestFilter
+    - filter(): no/bad-prefix Authorization header -> return (unauthenticated,
+      §3.2 — public endpoints still work, @RolesAllowed rejects the rest later).
+    - JwtService.verify(token) -> userId; any JwtException -> Unauthorized
+      (INVALID_TOKEN, "invalid or expired"). No ExpiredJwtException special case
+      (§0: "refresh hint" shaping is a later product decision).
+    - TransactionRunner.call: findById, orElse(null); null OR blocked ->
+      Unauthorized (INVALID_TOKEN, "no longer valid"). Fresh lookup per request
+      (§3.1): verified/blocked are accurate as of THIS request, never stale
+      token claims. One extra query per authenticated request — the same
+      correctness-over-query-count tradeoff Tasks 03–04 already made.
+    - setSecurityContext(new UserSecurityContext(user, previous.isSecure())) —
+      reads HTTPS-ness from the container's context instead of hardcoding.
+    - Never builds a Response (§9.5) — only throws, so the mapper owns all JSON.
+
+ 5) api.security.UserSecurityContext  [api/security/UserSecurityContext.java]
+    - implements SecurityContext; getUser() returns the resolved User (one cast,
+      no second lookup — see §10.4 for how the cast survives Jersey).
+    - getUserPrincipal() -> principal named by user id; isUserInRole(role) ->
+      role-name equality — THE one line RolesAllowedDynamicFeature calls, i.e.
+      the entire bridge between @RolesAllowed("HOST") and the UserRole enum.
+    - isSecure() -> container value; getAuthenticationScheme() -> "Bearer".
+    - Deliberately a different package from com.backend.security (crypto
+      primitives): different layer, same name pattern, kept apart on purpose.
+
+ 6) api.diagnostic.WhoAmIResource  [api/diagnostic/WhoAmIResource.java]
+    - @Path("/_diag/whoami"): whoAmI() (no @RolesAllowed — the ONE endpoint
+      proving the unauthenticated path, §8) + hostOnly() (@RolesAllowed("HOST")).
+    - Takes @Context ContainerRequestContext and reads getSecurityContext() off
+      it (DEPLOY FIX, §10.4) instead of @Context SecurityContext directly.
+    - Response is a 3-field diagnostic record — explicitly NOT a DTO preview.
+    - Throwaway: delete com.backend.api.diagnostic once real protected endpoints
+      prove the same behavior (WhatToFix.txt rule 6 agrees).
+
+ 7) security.JwtService.verify  [companion addition, §4]
+    - public static UUID verify(String token): parser().verifyWith(KEY).build()
+      .parseSignedClaims(token) -> UUID(subject). Throws JwtException subtypes;
+      meaning-of-failure belongs to the caller (the filter), not here.
+    - The "small, natural follow-up" Task 04 §8 promised — now delivered, in the
+      home Task 04 said it was waiting for.
+
+ --------------------------------------------------------------------------------
+  PURPOSE — WHAT TASK 05 IS FOR, AND WHY IT FOLLOWS 01–04
+ --------------------------------------------------------------------------------
+
+  THE SHORT VERSION
+    Tasks 01–04 built a complete system with no door to knock on: entities,
+    queries, rules, and identity-minting — all reachable only from inside the
+    JVM. Task 05 builds the doorframe: the HTTP engine, the per-request
+    pipeline that turns a bearer token into the resolved User every service
+    method has been taking since Task 03, and the JSON error shape every
+    ApiException has been carrying since Task 03. First task whose deliverable
+    is verifiable only at runtime — which is why its Definition of Done demands
+    a deployment, not just a compile.
+
+  WHERE THE FIVE TASKS SIT NOW (spec §1: Resource -> Service -> Repository)
+    +------------------------------------------------------------------+
+    |  api/         <-- THIS TASK BUILDS IT (pipeline only, no real      |
+    |                 resources yet). Filter, context, mappers, roles,   |
+    |                 bootstrap + one throwaway diagnostic.              |
+    +------------------------------------------------------------------+
+    |  dto/         <-- STILL NOT BUILT (Task 06+)  request/response     |
+    |                 shapes, @Valid boundary.                          |
+    +------------------------------------------------------------------+
+    |  service/     <-- TASKS 03/04.  Untouched — and now CALLED FOR THE |
+    |                 FIRST TIME BY SOMETHING REAL: the filter uses      |
+    |                 TransactionRunner + UserRepository directly.       |
+    +------------------------------------------------------------------+
+    |  security/    <-- TASK 04 + verify() this task.  Issuing finally   |
+    |                 meets its reader: the filter.                     |
+    +------------------------------------------------------------------+
+    |  repository/  <-- TASKS 02/03.  Untouched — findById was already   |
+    |                 all the filter needed.                           |
+    +------------------------------------------------------------------+
+    |  domain/      <-- TASK 01.  Untouched.                            |
+    +------------------------------------------------------------------+
+
+  WHAT TASK 01 GAVE TASK 05
+    - User.isBlocked() — the filter's second rejection branch. A blocked user's
+      tokens die on next request without any revocation list, because the check
+      is a fresh lookup, not a claim.
+    - The LAZY-by-default entity shape, which is why §3.1's fresh-lookup design
+      is safe: the filter reads only id/role/verified/blocked (scalars), so the
+      User outlives the filter's transaction with nothing uninitialized.
+
+  WHAT TASK 02 GAVE TASK 05
+    - UserRepository.findById — the filter's entire DB access is one existing
+      method. Third task in a row needing zero new queries.
+    - The Dotenv + eager-init pattern JwtService already followed; the
+      WeakKeyException-at-first-touch behavior, which the deployment now
+      exercises for real (first authenticated request would fail loud, not
+      silent, on a bad secret).
+    - persistence.xml's explicit <class> list as precedent for RestApplication's
+      explicit .register() list — same philosophy, constructor instead of XML.
+
+  WHAT TASK 03 GAVE TASK 05
+    - TransactionRunner, used by the filter exactly the way a service uses it —
+      the filter is effectively a service caller that happens to run before the
+      resource method. getTransaction grep still returns only TransactionRunner.
+    - The ApiException family, which finally meets the mapper that reads
+      getStatus()/getErrorCode()/getMessage() verbatim — the passthrough design
+      from Task 03 works unchanged: no translation code was needed in the mapper.
+    - The "already-resolved User" contract (§3.1): this task is the thing that
+      produces that User from a header. Task 03 defined the consumer, Task 04
+      minted the credential, Task 05 closes the loop.
+
+  WHAT TASK 04 GAVE TASK 05
+    - issueAccessToken (unchanged) + the verify() home it predicted. The
+      sub=user-id, minimal-claims design is what makes the filter's
+      "token is only identity, User is the truth" rule possible.
+    - UnauthorizedException + INVALID_TOKEN — the filter's only failure mode,
+      already in the family, no new exception type needed.
+    - The 15-min access / 30-day rotating refresh split, which the endpoint
+      matrix relies on: short-lived bearer + long-lived rotation is exactly what
+      makes "reject present-but-bad, ignore missing" (§3.2) safe to enforce.
+
+  WHAT TASK 05 ADDS BACK TO THE PILE
+    - A working HTTP pipeline every Task 06+ resource registers into with one line.
+    - Enforceable @RolesAllowed — the annotation existed since Jakarta EE, but
+      did nothing without RolesAllowedDynamicFeature + isUserInRole.
+    - The error envelope on the wire — the first time an ApiException becomes
+      visible outside the JVM, in the exact shape Tasks 01–04 assumed.
+    - JwtService.verify — completing the token half Task 04 deferred.
+    - WhoAmIResource — the same-role-as-PersistenceSmokeCheck diagnostic, with
+      a deletion instruction attached (not a pet endpoint).
+
+  THE PROBLEM THIS TASK HAD TO SOLVE FIRST
+    WhatToFix.txt's runtime question: Jersey explicitly, or pure Jakarta EE
+    app-server managed? On Tomcat there is no EE-managed option — "pure Jakarta"
+    would mean hand-rolled servlet dispatch, i.e. re-implementing Jersey badly.
+    So Jersey 3.1.1 (Servlet 6 / Tomcat 10.1 compatible), hk2 flavor (no Weld
+    shutdown conflicts). Dependencies follow the decision, never precede it
+    (WhatToFix.txt rule 4).
+
+  WHAT THIS TASK DELIBERATELY DID *NOT* DO
+    No real resources (would mean debugging plumbing + endpoint at once), no DTOs
+    (the diagnostic record is not a preview), no ExpiredJwtException special
+    casing (product decision for resource builders), no logging framework
+    (java.util.logging, same as Hibernate's show_sql), no CDI, no tests.
+
+ --------------------------------------------------------------------------------
+  TASK 05 CONVENTIONS — AND WHERE EACH ONE CAME FROM
+ --------------------------------------------------------------------------------
+
+   Convention                        Origin            Why it exists
+   --------------------------------- ----------------- ---------------------------------
+   Filter resolves a FRESH User;     Task 04 minimal   token claims would go stale
+   token is identity only            claims + §3.1     (verified/blocked change);
+                                                       lookup-per-request favors
+                                                       correctness, as always
+   Present-but-bad token rejected;   §3.2              a failing authenticator must
+   missing token passes through                        not look anonymous — surfacing
+   unauthenticated                                     beats hiding
+   @RolesAllowed, not hand-written   §3.3              one wiring, every future
+   role ifs                                            resource just annotates
+   Errors throw, never build         §3.4 + Task 03    single mapper = single wire
+   Response (§9.5 enforced)          §3.4              shape for filter and service
+                                                       errors alike
+   Explicit .register(), no scan     Task 03 <class>   discovery is unreliable on
+                                     precedent + §7    plain servlet containers
+   api.security vs security split    §2                layer obvious from package
+   WebApplicationException passes    deploy fix §10.4  ExceptionMapper<Throwable>
+   through GenericExceptionMapper                      otherwise eats framework
+                                                       403s/404s -> 500s
+   Resource reads context via        deploy fix §10.4  Jersey wraps injected
+   request.getSecurityContext()                        SecurityContext; the raw
+                                                       instance is on the request
+
+ --------------------------------------------------------------------------------
+  DESIGN PATTERNS USED IN TASK 05
+ --------------------------------------------------------------------------------
+   12) Front Controller + Filter Chain (Jersey/servlet)
+      Definition: One entry point owns dispatch; orthogonal concerns attach as
+      ordered filters around the endpoint invocation.
+      Applied: RestApplication (front controller, @ApplicationPath) +
+               AuthenticationFilter at Priorities.AUTHENTICATION (chain link).
+               The priority is set correctly with one filter registered so the
+               second one never needs a retrofit.
+      Why: Auth becomes ambient — no resource method will ever parse a header.
+
+   13) Provider / ExceptionMapper (JAX-RS)
+      Definition: Failure rendering is registered capability, not call-site code.
+      Applied: ApiExceptionMapper (typed) + GenericExceptionMapper (catch-all);
+               JAX-RS picks most-specific, so ApiException never reaches the
+               generic one. Filter throws into the same pipeline (§3.4).
+      Why: One wire shape for every error, present and future, with zero
+           per-resource try/catch.
+
+   14) SecurityContext as Request-Scoped Identity Carrier
+      Definition: The container's own per-request slot carries caller identity
+      from authentication to authorization to the endpoint.
+      Applied: Filter sets UserSecurityContext; RolesAllowedDynamicFeature reads
+               isUserInRole; resource reads getUser(). Three consumers, one object,
+               standard interface — no project-global "current user" static.
+      Why: No statics, no thread-locals, no second lookup; the standard slot the
+           framework already passes everywhere.
+
+   Patterns deliberately NOT introduced:
+    - DTO/assembler for the diagnostic response — a 3-field record is not a layer.
+    - Custom authorization annotations — @RolesAllowed already exists; wrapping it
+      would be novelty for its own sake.
+    - A logging facade — one log statement doesn't justify one.
+
+ --------------------------------------------------------------------------------
+  DEFERRED (§8) — STILL NOT BUILT
+ --------------------------------------------------------------------------------
+   - Real resources (ListingResource, AuthResource, ...) — Task 06+.
+   - DTOs — Task 06+ (diagnostic record is not a preview).
+   - ExpiredJwtException-specific responses — product decision for resource builders.
+   - Logging framework — jul suffices for one statement.
+   - CDI, tests — unchanged.
+   - From earlier tasks, untouched: email verification + password reset (no
+     provider), login rate limiting (live gap, still marked), expired-token
+     cleanup (no scheduler), photo endpoints (no storage decision), Booking/
+     Message/Report/User services, booking auto-reject, conversations query,
+     page-size clamping.
+   - ADDED by this task's arrival: delete WhoAmIResource once real protected
+     endpoints prove the same behavior (its own javadoc + WhatToFix.txt rule 6).
+
+ --------------------------------------------------------------------------------
+  VERIFICATION
+ --------------------------------------------------------------------------------
+   Static (§9.1–§9.6):
+   - 6 files at §2 paths (pre-existing, verified against §§5–8 verbatim — kept).
+     JwtService diff: exactly +3 imports, +verify() — KEY/issueAccessToken byte-identical.
+   - pom.xml: exactly the 3 Jersey additions from §1. No persistence.xml change.
+   - mvn -q -DskipTests compile -> BUILD SUCCESS (was red before: Jersey
+     unresolvable + verify() missing — the WhatToFix.txt blockers, now gone).
+   - grep "javax\." api/ -> 0 hits. grep "Response\." AuthenticationFilter -> 0 hits.
+   - RestApplication registers exactly the 5 §7 classes.
+   - getTransaction still only in TransactionRunner (filter goes through it).
+
+   Live (§9.7 + §10, isolated Tomcat 10.1.60 base on port 8081, ROOT.war, Postgres
+   local — the project's own Tomcat install untouched, Eclipse 8080 setup untouched):
+   - 0. GET /api/_diag/whoami, no header -> 200 {"authenticated":false,...} (§9.7 PASS —
+     Jersey auto-detected @ApplicationPath with zero web.xml, as §1 predicted).
+   - 1. Same + valid HOST bearer -> 200 {"authenticated":true, correct id, "HOST"}.
+   - 2. GET /api/_diag/whoami/host-only + HOST bearer -> 200.
+   - 3. Same + VISITOR bearer -> 403 (§10 PASS — RolesAllowedDynamicFeature rejects).
+   - 4. Garbage bearer -> 401 {"status":401,"error":"INVALID_TOKEN",...} envelope (§10 PASS).
+   - Token minting: throwaway MintTokens script in temp (register HOST + VISITOR,
+     login, print tokens — same shape as PersistenceSmokeCheck, NOT in repo per §0).
+   - Ordering constraint discovered: persistence.xml is drop-and-create, so the
+     server-side EMF must initialize BEFORE rows exist — the script presents a
+     validly-signed nonexistent-user token first (401, harmless), THEN registers.
+     Reversing the order wipes the users on the server's first EMF init.
+   - NO web.xml was needed; NO HK2/Jackson conflict (Maven mediated to
+     jackson-databind 2.18.5, Jersey 3.1.1 happy); Dotenv found WEB-INF/classes/.env
+     via its classpath fallback (proven: JwtService loaded JWT_SECRET in-container).
+
+ --------------------------------------------------------------------------------
+  DEPLOY DEVIATIONS (§10.4) — WHAT DIDN'T MATCH THE TASK FILE'S ASSUMPTIONS
+ --------------------------------------------------------------------------------
+   Two, both required, both minimal, both compile-clean against §9:
+
+   D1. WhoAmIResource injection point (§8 verbatim doesn't work on Jersey).
+       Symptom: ClassCastException — SecurityContextInjectee cannot be cast to
+       UserSecurityContext; every authenticated call -> 500 via GenericExceptionMapper.
+       Cause: Jersey wraps an @Context-injected SecurityContext in its own delegate;
+       the "one cast" from §5.2's javadoc only holds for the instance the filter
+       set. Fix: resource takes @Context ContainerRequestContext and calls
+       getSecurityContext() (portable JAX-RS API, returns the raw instance) —
+       same one-cast contract, no Jersey-internal dependency. Diagnostic-only file;
+       production classes untouched by this. Documented in the file's javadoc.
+
+   D2. GenericExceptionMapper ate framework statuses (§6 verbatim incomplete).
+       Symptom: VISITOR on host-only -> 500, not the task's own "403 if VISITOR".
+       Cause: a registered ExceptionMapper<Throwable> outranks Jersey's default
+       handling, so RolesAllowed's ForbiddenException (which carries its own 403
+       Response) was flattened to 500. Fix: `if (exception instanceof
+       WebApplicationException) return exception.getResponse();` first — 4 lines,
+       framework statuses pass through, truly-unexpected still becomes 500.
+       Same fix also preserves future 404s. Noted in the file's javadoc.
+
+   Consequence to record: the 403 body is Tomcat/Jersey's default HTML error
+   page, NOT the JSON envelope — status is correct per §10, shape is not the
+   envelope. Giving 403s the envelope would need an ExceptionMapper<Forbidden-
+   Exception> with an invented error code — that is the "finer-grained response"
+   product decision §0 defers, so it stays deferred. Flagged, not snuck in.
+
+ --------------------------------------------------------------------------------
+  AMBIGUITIES & FLAGS (per §10.2–§10.4)
+ --------------------------------------------------------------------------------
+   1. [§10.2 FLAG] ErrorEnvelope shape (timestamp, status, error, message, path)
+      is rebuilt from memory of spec §1 as read during Task 01 — NOT re-read for
+      this task (the task file says so itself). Check field names / presence of
+      `path` against the actual API-Specification.md before Task 06 locks
+      response DTOs around it. Cheapest to settle now, expensive after DTOs exist.
+   2. Register-auto-login (Task 04 flag) is still open and now blocks a Task 06
+      DTO shape — same note as Task 04's report, repeated because the consumer
+      (AuthResource) is one task away.
+   3. No deploy assumption from §1 broke except D1/D2 above: no web.xml needed,
+      stock port scheme worked (8081 on the isolated base), no HK2 conflict.
+
+ --------------------------------------------------------------------------------
+  REPORT BACK (per TASK-05 §10)
+ --------------------------------------------------------------------------------
+   1. Files: api/{RestApplication, ApiExceptionMapper, GenericExceptionMapper}.java,
+      api/security/{AuthenticationFilter, UserSecurityContext}.java,
+      api/diagnostic/WhoAmIResource.java (all pre-existing, verified verbatim
+      against §§5–8). JwtService gains verify() + 3 imports; issueAccessToken/KEY
+      unchanged. pom.xml gains exactly the 3 Jersey 3.1.1 deps.
+   2. ENVELOPE FLAG: ErrorEnvelope is from memory of spec §1, not a fresh read —
+      confirm (timestamp, status, error, message, path) against the real file
+      before Task 06. See ambiguity 1.
+   3. DEPLOYED AND EXERCISED, not just compiled: full 5-check matrix above, all
+      green (200/false, 200/HOST, 200/host-only, 403/VISITOR, 401/garbage).
+      Jersey auto-registration, HK2, filter firing, role rejection, both mappers
+      all proven live. The throwaway MintTokens script stays in temp, out of the repo.
+   4. Deploy notes: nothing beyond D1/D2 — no web.xml, no port/context changes
+      needed (isolated base used 8081/ROOT.war; project Tomcat + Eclipse setup
+      untouched), no HK2/Jackson conflict, Dotenv classpath fallback confirmed
+      in-container, drop-and-create ordering constraint documented for future
+      test scripts.
+
+  Suggested commit:
+   feat: add JAX-RS bootstrap and bearer-token authentication
+
+   Jersey 3.1.1 is the project's first real JAX-RS implementation —
+   jakarta.jakartaee-api only ever gave compile-time annotations.
+   AuthenticationFilter resolves a bearer token to a fresh User per
+   request (never trusts token claims beyond identity); RolesAllowed-
+   DynamicFeature makes @RolesAllowed enforceable. ApiExceptionMapper/
+   GenericExceptionMapper give every error, service-thrown or
+   unexpected, the same JSON shape. WhoAmIResource is throwaway
+   verification, not a real endpoint — delete once confirmed working.
+   JwtService gains verify(); issueAccessToken is unchanged.
+================================================================================
+
+
+================================================================================
+ TASK 06 — Auth DTOs, Bean Validation & AuthResource
+ DarCom Co-Hosting Platform (darcom-backend)
+ Stack: Java 21 · Jakarta EE 10 · Hibernate 6.4.4 · PostgreSQL · Jersey 3.1.1
+        + hibernate-validator 8.0.5.Final, expressly 5.0.0,
+          jersey-bean-validation 3.1.1, jackson-datatype-jsr310 2.18.5 (deploy fix)
+================================================================================
+
+ Goal: The first real, working endpoints. Until now every layer was proven
+       with throwaway scripts; this task puts the HTTP boundary in front of
+       AuthService — request DTOs in, response DTOs out, @Valid enforced at the
+       boundary — and establishes the DTO/resource pattern every future
+       resource copies. No service, crypto, or exception change: AuthService is
+       called exactly as Task 04 left it.
+
+ Deliverable: 8 new files (7 in the manifest + 1 deploy-driven), 1 edited,
+              1 deleted, 4 pom.xml dependencies (3 new + 1 pre-existing).
+              No tests (§0). One deploy-driven addition beyond the manifest
+              (JacksonConfig + jsr310) — without it no endpoint returning an
+              Instant can respond; documented below.
+
+ Files created (src/main/java/com/backend):
+   1. dto/auth/RegisterRequest.java      mutable bean, @NotBlank/@Email/@Size/@NotNull
+   2. dto/auth/LoginRequest.java         mutable bean, @NotBlank only (deliberate, §6)
+   3. dto/auth/RefreshTokenRequest.java  mutable bean, shared by refresh + logout
+   4. dto/auth/UserResponse.java         record + from(User) — no passwordHash field
+   5. dto/auth/AuthResponse.java         record + from(AuthResult)
+   6. api/ValidationExceptionMapper.java ConstraintViolationException -> 400 envelope
+   7. api/AuthResource.java              POST /api/auth/register|login|refresh|logout
+   8. api/JacksonConfig.java             ObjectMapper w/ JavaTimeModule, ISO dates (DEPLOY FIX)
+
+ Files edited (1): api/RestApplication.java
+   + register ValidationExceptionMapper, JacksonConfig, AuthResource;
+   - import + register WhoAmIResource (retired after the interop proof, §5).
+
+ Files deleted (1): api/diagnostic/WhoAmIResource.java (+ now-empty diagnostic/).
+ It proved Task 05's plumbing, then proved Task 05↔06 interop (login token ->
+ whoami 200), then went — exactly its documented lifecycle.
+
+ Files edited (infra): pom.xml (+3: hibernate-validator, expressly,
+ jersey-bean-validation; jakarta.validation-api 3.0.2 already present since
+ Task 01, NOT duplicated, per §1; +1 jsr310 deploy fix). No persistence.xml
+ change. No change to domain/persistence/repository/exception/security/service.
+
+ New dependencies:
+   hibernate-validator 8.0.5.Final — the actual BV implementation; without it
+     @NotBlank/@Email/@Size are inert annotations nothing reads.
+   expressly 5.0.0 — EL impl HV needs for {…} message interpolation (HV's own
+     documented recommendation).
+   jersey-bean-validation 3.1.1 — makes Jersey invoke @Valid; auto-discovered,
+     no .register() (the one exception to this project's explicit-registration
+     rule — justified: it's Jersey's own wiring, not ours).
+   jackson-datatype-jsr310 2.18.5 (DEPLOY FIX, beyond §1) — version-matched to
+     the existing jackson-databind; see deviation D3.
+
+ --------------------------------------------------------------------------------
+  CLASS / FUNCTION DEFINITIONS — TASK 06
+ --------------------------------------------------------------------------------
+
+ 1–3) dto.auth.{RegisterRequest, LoginRequest, RefreshTokenRequest}
+    Plain mutable beans: no-arg ctor, private fields, getters/setters — NOT
+    records (§3.1, §9.5). Records serialize fine outward but the Jersey +
+    Jackson-record + HV combination on *request* params is newer and less proven
+    than the decade-old mutable-bean path; for a @Valid that must never
+    silently not-fire, boring wins.
+    - RegisterRequest: email @NotBlank @Email; password @NotBlank @Size(8,72) —
+      max 72 is Task 04's bcrypt boundary, not arbitrary; min 8 is new here
+      (boundary-only, no service involvement). fullName @NotBlank; phone free;
+      role @NotNull ONLY — ADMIN passes @Valid and dies in the service's 403
+      (two-layer defense, Task 04 §7's note honored: the DTO never becomes the
+      sole privilege guard).
+    - LoginRequest: email/password @NotBlank, NO @Email — deliberate (§6): a
+      malformed email must funnel into the identical 401 with unknown-email and
+      wrong-password (Task 04 §3.4, one layer further out), never short-circuit
+      to a 400 that leaks "this input shape is the problem."
+    - RefreshTokenRequest: single @NotBlank refreshToken, shared by refresh/logout.
+
+ 4) dto.auth.UserResponse  [record + from(User)]
+    (id, email, fullName, phone, role, verified, blocked, createdAt). The
+    "never serialize an entity" rule (Task 03 §8) lands here: there is no
+    passwordHash field because from() only copies what's listed — the mechanism
+    IS the field list, no separate enforcement needed. createdAt stays Instant;
+    the wire format (ISO string) is JacksonConfig's job, not the DTO's.
+
+ 5) dto.auth.AuthResponse  [record + from(AuthResult)]
+    (accessToken, refreshToken, UserResponse). from() composes UserResponse.from —
+    nesting factories, not flattening. §3.2's co-located-factory pattern in both.
+
+ 6) api.AuthResource  [@Path("/auth")]
+    Thin by construction (§3.3): map DTO -> service input, call, map back. No
+    hash computed, no role checked, no TransactionRunner, no repository — §9.6
+    grep-clean. private final AuthService field (stateless service + per-request
+    resource lifecycle = essentially free; no @Singleton needed).
+    - register -> 201 + UserResponse (§3.4: explicit CREATED, not default 200).
+    - login/refresh -> 200 + AuthResponse. logout -> 204, no @Produces (no body
+      to describe). Every method returns Response, never a bare DTO (§3.4).
+
+ 7) api.ValidationExceptionMapper
+    Catches jakarta.validation.ConstraintViolationException (what Jersey's BV
+    module throws BEFORE a resource body runs — §4: no ValidationException type
+    exists because there is no code of ours in that path to throw one).
+    Joins violations as "path message; …" into the SHARED ErrorEnvelope with
+    400/VALIDATION_ERROR — one envelope definition, three mappers. Ours won over
+    jersey-bean-validation's built-in default mapper (proven live: the 400 body
+    is our envelope, not Jersey's ValidationErrorMessage shape — explicit
+    registration outranks auto-discovery).
+
+ 8) api.JacksonConfig  [DEPLOY FIX — beyond the §2 manifest]
+    ContextResolver<ObjectMapper>: JavaTimeModule + WRITE_DATES_AS_TIMESTAMPS
+    off (ISO-8601 strings, same shape the envelope's timestamp already uses).
+    Registered explicitly in RestApplication. See D3.
+
+ --------------------------------------------------------------------------------
+  PURPOSE — WHAT TASK 06 IS FOR, AND WHY IT FOLLOWS 01–05
+ --------------------------------------------------------------------------------
+
+  THE SHORT VERSION
+    Five tasks built a system reachable only from inside the JVM — entities,
+    queries, rules, identity, HTTP pipeline — with the last mile missing: the
+    boundary that speaks JSON to the outside. Task 06 is that mile for Auth:
+    it turns AuthService's Java API into the spec's HTTP API, and in doing so
+    writes the DTO/resource template (mutable validated request beans, record
+    responses with from(), thin resources, explicit statuses, one shared
+    envelope) that Listing/Booking/Message resources will copy verbatim.
+
+  LAYERING, NOW COMPLETE FOR AUTH (spec §1: Resource -> Service -> Repository)
+    api/AuthResource + dto/auth   <-- THIS TASK (boundary: JSON in/out, @Valid)
+    service/AuthService           <-- TASK 04, called unchanged
+    security/*                    <-- TASK 04 (+verify in 05), untouched
+    repository/*                  <-- TASK 02, untouched
+    domain/*                      <-- TASK 01, untouched
+    api pipeline (filter/mappers) <-- TASK 05, reused + 1 mapper added
+
+  WHAT TASKS 01–05 EACH GAVE TASK 06
+    - 01: the validation ANNOTATIONS finally executed (@Email/@NotBlank sat inert
+      on entities since Task 01 waiting for a @Valid boundary); User getters for
+      from(); UserRole for role fields. Side effect of HV arriving: entities are
+      now ALSO validated on persist (JPA AUTO mode) — harmless, all service-set
+      fields satisfy it.
+    - 02: nothing new needed (fourth straight task: zero new queries). findByEmail/
+      existsByEmail serve login/register exactly as Task 02's comments foretold.
+    - 03: the envelope shape the new mapper reuses (one definition, three mappers);
+      the thin-layer discipline the resource follows; "never serialize entities"
+      finally enforced by from().
+    - 04: AuthService called with ZERO signature changes (§0/§9: fit was clean —
+      the resource maps onto register/login/refresh/logout 1:1 with no workaround
+      anywhere). The INVALID_ROLE/INVALID_CREDENTIALS semantics the DTOs defer to.
+    - 05: the pipeline (filter/context/roles/Api+Generic mappers), +1 mapper;
+      WhoAmI as interop partner (login token -> whoami 200) before retirement;
+      RestApplication's explicit-register convention extended by 3 lines.
+
+  WHAT TASK 06 ADDS BACK
+    - The DTO/resource pattern, written once and copyable: the highest-leverage
+      artifact of the task (more than the endpoints themselves).
+    - A live 400 path — the first runtime proof of the whole BV stack.
+    - JacksonConfig — the JSON infrastructure every Instant-bearing DTO rides on.
+    - Retirement of the last throwaway (diagnostic/ gone; only
+      PersistenceSmokeCheck's test-source script remains, and it's test-scoped).
+
+  THE PROBLEM THIS TASK HAD TO SOLVE FIRST
+    Records or beans for requests? Chose boring-mutable-beans (§3.1) — not from
+    habit but from failure-mode analysis: a @Valid that silently never fires is
+    the worst outcome (invalid data reaching services that assume validated
+    input), and the bean path is the one with a decade of proof. Responses stay
+    records: nothing validates on the way out, Jackson serializes them cleanly
+    (proven live in Task 05 by WhoAmIResponse).
+
+  WHAT THIS TASK DELIBERATELY DID *NOT* DO
+    Non-Auth resources (one at a time); any AuthService/JwtService/exception
+    change (fit was clean — nothing to work around); a ValidationException type
+    (§4: nothing of ours throws in that path); malformed-JSON handling (§0: needs
+    its own mapper, not Auth-specific — and post-D2 the symptom is Jersey's
+    default 400 page, not a 500; same gap, updated description); tests.
+
+ --------------------------------------------------------------------------------
+  TASK 06 CONVENTIONS — AND WHERE EACH ONE CAME FROM
+ --------------------------------------------------------------------------------
+
+   Convention                        Origin            Why it exists
+   --------------------------------- ----------------- ---------------------------------
+   Requests: mutable beans + @Valid; Task 06 §3.1      beans = proven @Valid path;
+   responses: records + from()                         records = clean outward JSON;
+                                                       from() IS the no-entity-
+                                                       leak mechanism
+   from() co-located with its DTO    §3.2              mapping lives with the shape,
+                                                       not scattered in resources
+   Resources thin: map/delegate/map  §3.3 + Task 03    services own rules+tx; the
+   back, no logic, no tx, no crypto   layering          resource with an `if` about
+                                                       non-status logic is misplaced
+   Always return Response (201/200/  §3.4              status explicit, never JAX-RS's
+   204), never bare DTO                                default 200
+   No ValidationException type; map  §4 + §5           Jersey throws CVE before our
+   ConstraintViolationException                        code runs — catch that type
+   directly                                            directly
+   ADMIN passes DTO, dies in service §6 + Task 04 §7   DTO must never be the sole
+                                                       privilege guard
+   Login: no @Email, all failures    §6 + Task 04 §3.4 must not leak which input
+   -> identical 401                                     was wrong
+   JacksonConfig registered          deploy fix D3     every Instant-bearing DTO
+   explicitly                                          needs it; scanning stays off
+
+ --------------------------------------------------------------------------------
+  DESIGN PATTERNS USED IN TASK 06
+ --------------------------------------------------------------------------------
+   15) Boundary Object / DTO (§3.1–§3.2)
+      Definition: Distinct types for crossing a layer boundary, decoupled from
+      the domain's shape and lifecycle.
+      Applied: Request beans (validation + Jackson-in) vs records (Jackson-out)
+               vs entities (JPA) — three shapes for one concept, each owned by
+               its layer. from() factories are the single crossing point.
+      Why: API shape can evolve without touching tables; passwordHash can never
+           leak because it has no field to leak through.
+
+   16) Thin Adapter (AuthResource, §3.3)
+      Definition: A layer whose only job is translating between its neighbors'
+      protocols, containing no domain logic.
+      Applied: DTO->User/String->service->DTO; status codes are the only
+               decisions made here. §9.6 grep is the mechanical enforcement.
+      Why: Business rules stay in one testable place; adding ListingResource
+           later is mapping work, not rule work.
+
+   17) Provider-Based Cross-Cutting Validation (§5 + jersey-bean-validation)
+      Definition: A framework extension point applies a concern uniformly,
+      without call-site code.
+      Applied: @Valid annotations + auto-discovered BV feature + explicitly
+               registered mapper. Zero validation code in AuthResource.
+      Why: Every future @Valid gets the same 400 envelope for free.
+
+   Patterns deliberately NOT introduced:
+    - A generic DTO<->entity mapper (ModelMapper/MapStruct style) — from() per
+      DTO is explicit and total; reflection mapping hides the field list that
+      IS the security mechanism here.
+    - A ValidationException type — would require catching CVE just to rethrow,
+      pure ceremony (§4).
+
+ --------------------------------------------------------------------------------
+  DEFERRED (§8 + this task's additions) — STILL NOT BUILT
+ --------------------------------------------------------------------------------
+   - Non-Auth resources (Listing next — copies this task's pattern).
+   - Malformed-JSON mapper (own small mapper; symptom now Jersey-default 400
+     page post-D2, still not the envelope).
+   - Null-body POST edge (null DTO passes @Valid -> NPE -> 500 envelope):
+     observed during analysis, unmentioned in the task, outside the §10 matrix.
+     A @NotNull on the parameter or a resource-level guard is a one-liner for
+     whoever wants it — flagged, not snuck in.
+   - Email verification + password reset (no provider), login rate limiting
+     (live gap), expired-token cleanup (no scheduler), photo endpoints (no
+     storage), Booking/Message/Report/User services, auto-reject, conversations,
+     page clamping — all untouched.
+   - Envelope-shape confirmation (Task 05 flag) still open — now MORE urgent:
+     ValidationExceptionMapper bakes the same shape in a third place.
+
+ --------------------------------------------------------------------------------
+  VERIFICATION
+ --------------------------------------------------------------------------------
+   Static (§9.1–§9.7, with one documented deviation):
+   - 8 new files (7 manifest + JacksonConfig/D3). RestApplication: exactly the
+     §5 edit + JacksonConfig line; diagnostic/ deleted (§9.1 modulo D3).
+   - pom.xml: hibernate-validator + expressly + jersey-bean-validation NEW;
+     validation-api NOT duplicated (§1 anticipated this). +jsr310 (D3).
+   - mvn -q -DskipTests compile -> BUILD SUCCESS, before and after deletion.
+   - javax. 0 hits in dto/ and api/. Request DTOs = classes w/ no-arg ctor;
+     responses = records. AuthResource: no PasswordHasher/JwtService/
+     TransactionRunner/repository. passwordHash: only the doc-comment line.
+   - No change to AuthService/JwtService/exceptions (§0 kept — fit was clean,
+     §10.2: no workaround anywhere).
+
+   Live (§10, isolated Tomcat 10.1.60 :8081, fresh drop-and-create slate):
+   - register valid HOST -> 201 + full UserResponse, createdAt ISO, NO passwordHash.
+   - same again -> 409 EMAIL_ALREADY_EXISTS envelope.
+   - missing email -> 400 VALIDATION_ERROR, our envelope (settles mapper
+     precedence: explicit registration beats jersey-bean-validation's default).
+   - bad email / short password -> 400 with interpolated messages (settles HV
+     8.0.5 vs validation-api 3.0.2: WORKS — validation fired, expressly rendered).
+   - ADMIN role -> passes @Valid, 403 INVALID_ROLE from the service (two layers).
+   - login -> 200 + accessToken/refreshToken/nested user; wrong pw AND malformed
+     email -> identical 401 INVALID_CREDENTIALS (the deliberate LoginRequest design).
+   - login token -> GET /api/_diag/whoami -> 200 true/HOST (§10.4 interop: Task 05
+     pipeline serving Task 06 tokens) — THEN diagnostic/ deleted.
+   - refresh -> 200 + DIFFERENT refreshToken (rotation); original reuse -> 401.
+   - logout -> 204 empty; refresh-after-logout -> 401; re-logout -> 204 (idempotent).
+   - Post-deletion redeploy: register+login green, /api/_diag/whoami -> 404.
+   - No web.xml, no HK2/Jackson conflict (mediated to 2.18.5), .env via classpath.
+
+ --------------------------------------------------------------------------------
+  DEPLOY DEVIATION (§10.4-equivalent) — D3: INSTANT SERIALIZATION
+ --------------------------------------------------------------------------------
+   Symptom: register PERSISTED the user, then its own 201 failed — response body
+   was Jackson's "Instant not supported by default: add jackson-datatype-jsr310"
+   as a 400 text page (duplicate-register 409 right after proved the row existed).
+   Cause: jersey-media-json-jackson's default ObjectMapper has no JavaTimeModule;
+   Task 05 never hit it (WhoAmIResponse is boolean+Strings — no dates). Every
+   future response DTO carries Instants, so this blocked all of them, not just Auth.
+   Fix (minimal, bootstrap-scoped, not endpoint-scoped): +jsr310 2.18.5 dep
+   (version-matched to jackson-databind) + api/JacksonConfig (ContextResolver,
+   JavaTimeModule, timestamps OFF) + 1 register line. 8th file + 4th dep beyond
+   the manifest — documented here instead of hidden. The alternative (String-ify
+   every Instant in every DTO) would corrupt all response shapes task after task.
+   §9 re-verified after the fix (javax 0, compile green, §9.6/§9.7 intact).
+
+ --------------------------------------------------------------------------------
+  AMBIGUITIES & FLAGS
+ --------------------------------------------------------------------------------
+   1. Spec §4 request/response shapes unverifiable (no spec file in repo) —
+      implemented literally per §6/§7. The register-no-tokens assumption (Task 04
+      flag) is now BAKED INTO the 201 body: if the spec wants auto-login, the
+      AuthResponse already exists to return — change is small, but the DTO shape
+      (201-with-tokens vs 201-user-only) must be settled before clients build on
+      it. Last cheap moment: now.
+   2. 403-envelope question (Task 05 D2 note) confirmed in passing: role
+      rejections still return Jersey's default page, not the envelope. Still
+      deferred per §0.
+   3. Null-body 500 edge (above) — one-line fix available, left for whoever owns
+      the next resource task to decide as the pattern (apply to all resources or none).
+
+ --------------------------------------------------------------------------------
+  REPORT BACK (per TASK-06 §10)
+ --------------------------------------------------------------------------------
+   1. Files: dto/auth/{RegisterRequest, LoginRequest, RefreshTokenRequest,
+      UserResponse, AuthResponse}.java; api/{ValidationExceptionMapper,
+      AuthResource, JacksonConfig(D3)}.java. RestApplication: +3 registrations,
+      −WhoAmI (deleted with its package after the interop proof).
+   2. AUTH SERVICE FIT: clean — zero signature changes, zero workarounds. Every
+      call maps 1:1 (register builds the User the service expects incl. leaving
+      passwordHash/verified/blocked for the service to set; login/refresh/logout
+      pass strings straight through). The task's "flag, don't work around"
+      clause was never triggered.
+   3. E2E: full §10 matrix above, all green, plus rotation/idempotency/ADMIN/
+      malformed-email extras. First task verifiable with real HTTP and no
+      throwaway script — MintTokens finally unnecessary (retired with WhoAmI).
+   4. Spec §4: implemented literally; no spec file in repo to check shapes
+      against — flags 1–3 above are the residual risks.
+
+  Suggested commit:
+   feat: add Auth DTOs, Bean Validation wiring, and AuthResource
+
+   hibernate-validator + expressly + jersey-bean-validation make @Valid
+   real for the first time (gap flagged since Task 01). Request DTOs
+   are plain validated beans; response DTOs are records with a from()
+   factory — UserResponse.from(User) is where passwordHash actually
+   stops reaching the client. ValidationExceptionMapper gives a failed
+   @Valid the same error envelope as every other failure, without a
+   new ValidationException type: Jersey throws ConstraintViolationException
+   directly, nothing of ours needs to catch and rethrow it.
+   AuthResource is a thin boundary over the unchanged AuthService.
+   WhoAmIResource retired — this is the real thing now.
+   (+ deploy fix: JacksonConfig + jsr310 — Instant-bearing DTOs couldn't
+   serialize without JavaTimeModule; 8th file, documented in Task.txt.)
+================================================================================
+
+
+================================================================================
+ TASK 07 — Listing DTOs & ListingResource
+ DarCom Co-Hosting Platform (darcom-backend)
+ Stack: Java 21 · Jakarta EE 10 · Hibernate 6.4.4 · PostgreSQL · Jersey 3.1.1
+        + zero new dependencies (like Task 03 — everything already on classpath)
+================================================================================
+
+ Goal: The HTTP boundary for Listings — the second resource, built by copying
+       Task 06's DTO/resource template onto Task 03's service. The task's real
+       work is the lazy-loading problem Task 06 never faced (Auth's User has no
+       associations; Listing has three): two companion edits make list items
+       JSON-safe without letting DTOs into the service or fetch-joins into
+       paginated collection queries.
+
+ Deliverable: 6 new files, 3 edited, 0 deleted, 0 new pom.xml dependencies.
+              No tests (§0). No spec-shape deviation found during e2e worth a
+              deviation entry — one task-file bug (mine, 4-arg PagedResponse),
+              caught by javac, fixed in task + code together.
+
+ Files created (src/main/java/com/backend):
+   1. dto/PagedResponse.java             shared generic envelope; totalPages derived
+   2. dto/listing/ListingRequest.java    mutable bean, POST+PUT shared shape
+   3. dto/listing/ListingResponse.java   full record + from() (scalars+host+photos)
+   4. dto/listing/HostSummary.java       (id, fullName) — no contact data, ever
+   5. dto/listing/PhotoResponse.java     nested shape only, no photo endpoints
+   6. api/ListingResource.java           6 endpoints: 201/200×4/204
+
+ Files edited (3):
+   api/RestApplication.java              +1 line (register ListingResource)
+   repository/ListingRepository.java     +JOIN FETCH host (findByHost) + Criteria
+                                         fetch (search) + JoinType import (35→41: §4)
+   service/ListingService.java           +initializeListItems calls ×2 + helper (§5)
+
+ No pom.xml / persistence.xml change. No domain/persistence/exception/security
+ change. AuthService/JwtService/mappers/filter untouched.
+
+ --------------------------------------------------------------------------------
+  CLASS / FUNCTION DEFINITIONS — TASK 07
+ --------------------------------------------------------------------------------
+
+ 1) dto.PagedResponse  [dto/PagedResponse.java]
+    - public record PagedResponse<T>(items, page, size, totalItems, totalPages)
+      Compact ctor derives totalPages (ceil div, 0 when size/totalItems ≤ 0 —
+      the empty-search case divides nothing by zero); 4-arg overload delegates,
+      so totalPages is never suppliable. page/size echoed as APPLIED (coerced),
+      not as asked. Sits in dto/ root next to nothing yet — second shared
+      carrier after PagedResult, and the envelope-builder PagedResult waited for.
+
+ 2) dto.listing.ListingRequest  [mutable bean, POST+PUT shared]
+    title/city @NotBlank + @Size caps mirroring entity columns (255/120 — a
+    passing request is guaranteed to fit the column); description free;
+    address @Size(max=255) only (nullable in entity); pricePerNight @NotNull
+    @PositiveOrZero (mirrors entity exactly); currency @NotBlank @Size(3,3)
+    REQUIRED (§3.6: null would overwrite the entity's "MAD" default → 500);
+    mealsIncluded primitive (missing key = false); activities
+    Set<@Size(max=120) String> (element constraint mirrors the 120-col).
+    No host/status/id fields exist to accept — un-settable by construction.
+
+ 3) dto.listing.HostSummary + PhotoResponse  [records + from()]
+    HostSummary(id, fullName): the §6 host block, minimal — UserResponse reuse
+    rejected (email/phone/verified/blocked on a public endpoint). PhotoResponse
+    (id, url, sortOrder): nested only, order preserved from @OrderBy.
+
+ 4) dto.listing.ListingResponse  [record + from()]
+    Full §6 shape (14 fields). from() nests HostSummary.from + PhotoResponse
+    mapping, defensive-copies both collections (DTO mutation can't reach the
+    entity). Callable post-transaction ONLY under the §§4–5 contract.
+    ListingStatus serializes as name (same as UserRole already does).
+
+ 5) api.ListingResource  [@Path("/listings"), thin per §3.3]
+    - create: @RolesAllowed("HOST"), 201. toListing() builds the detached
+      carrier (all 8 editable fields, nothing else — PUT-status-change
+      impossible by absence). Service sets host+status.
+    - search: public, 200 envelope. Filters pass straight through (all optional).
+    - findMine: @RolesAllowed("HOST"), 200 envelope, all statuses.
+    - getById: public, 200. No status filter (Task-03 flag carried, unchanged).
+    - update: @RolesAllowed("HOST"), 200 same shape as GET (Task-03 reuse rule).
+    - delete: @RolesAllowed("HOST"), 204 no body.
+    - currentUser(): the D1 idiom (request-context getSecurityContext + cast),
+      one helper, four callers. normalizePageable(): coerce (page≥0, 1≤size≤100,
+      MAX_SIZE bounds the §5 N+1). toPagedResponse(): stream-map + 4-arg envelope.
+    - /mine-vs-/{id}: safe — literal beats template, and UUID-typed param can't
+      parse "mine" anyway (belt + suspenders, verified live: both resolve).
+
+ 6) Companion edits (§§4–5)
+    Repo: to-one fetch only (JPQL word + Criteria root.fetch INNER + import).
+    Safe: no row duplication (no DISTINCT needed), no in-memory-pagination
+    switch (collection-fetch-only hazard — the Task-03-§6.1 rule restated for
+    paginated queries). Counts + findByHostAndStatus untouched.
+    Service: initializeListItems(items) in search/findMine, in-lambda —
+    photos + activities (host already fetched). ≤2 SELECTs/item, ≤200 at the
+    clamp ceiling: stated, bounded, MVP-acceptable under the established
+    correctness-over-queries rule.
+
+ --------------------------------------------------------------------------------
+  PURPOSE — WHAT TASK 07 IS FOR, AND WHY IT FOLLOWS 01–06
+ --------------------------------------------------------------------------------
+
+  THE SHORT VERSION
+    Task 06 proved the DTO/resource template on the easy case (Auth: scalar-only
+    User, no lazy problem). Task 07 proves it on the hard case (Listing: three
+    lazy associations that must cross a closed transaction into JSON). The
+    template survives unchanged — the new knowledge is all in the two companion
+    edits and the rules constraining them (to-one fetch yes, collection fetch
+    never; init in service, map in resource).
+
+  WHAT EACH PRIOR TASK GAVE (concretely used, not credited in passing)
+    - 01: column lengths mirrored in @Size caps; "MAD" default creating the
+      currency-required rule; clear-then-addAll tolerating null activities;
+      @OrderBy preserved through mapping.
+    - 02: Pageable (validation reused by normalize pre-check... rather: Pageable
+      ctor still guards; resource coerces before constructing); findByHost/search
+      as the two query sites; fifth straight task needing zero new queries.
+    - 03: the service (signatures fit 1:1 — update's carrier convention gets its
+      first real JSON-built caller, works unchanged); the envelope both mappers
+      already shape; the REMOVED-visibility flag, observed live, still open.
+    - 04: verified-guard as the e2e's first assertion (guard branch before happy
+      path); INVALID_ROLE/NOT_OWNER semantics deferred to, not reimplemented.
+    - 05: D1 user-resolution idiom (the only correct cast, used 4×); framework vs
+      service 403 distinction (both observed live, told apart); RolesAllowed wiring.
+    - 06: the entire template (bean/record split, from() co-location, thin
+      resource, explicit statuses, shared envelope); JacksonConfig serializing
+      the first Instant-bearing response DTOs; ValidationExceptionMapper firing
+      on the first listing 400.
+
+  WHAT TASK 07 ADDS BACK
+    - PagedResponse: the shared envelope — Booking/Message/Admin lists inherit it.
+    - The lazy-contract pattern (fetch to-one at query, init collections in
+      service, map in resource) with its stated bound — the next entity with
+      associations copies the reasoning, not just the code.
+    - Proof that services survive real JSON-built carriers (detached Listing
+      from Jackson, not hand-built) with zero signature changes.
+
+  PROBLEMS SOLVED FIRST (both in-task, both documented, neither deferred)
+    - Post-transaction mapping 500s: designed out via §§4–5 before any endpoint
+      was hit (contrast D1–D3, found live). Prevention beats discovery.
+    - Unverified-host e2e block: psql flip prescribed as labeled scaffolding for
+      the still-missing verify-email endpoint (guard branch asserted FIRST, so
+      the scaffolding skips nothing unproven).
+
+  DELIBERATELY NOT DONE: photo endpoints (storage), 409-booking HTTP proof (no
+  BookingService — service-covered only, no repo-faked bookings), sort param
+  (unevidenced in-repo; no speculative signature churn), min>max 400 (honest
+  empty page), REMOVED-visibility change (flag carried), envelope confirmation
+  (now baked 5th place — urgent), 403-envelope/null-body/malformed-query edges
+  (observed mechanics, deferred pattern decisions), CDI/tests/others untouched.
+
+ --------------------------------------------------------------------------------
+  TASK 07 CONVENTIONS — AND WHERE EACH ONE CAME FROM
+ --------------------------------------------------------------------------------
+
+   Convention                        Origin            Why it exists
+   --------------------------------- ----------------- ---------------------------------
+   One full response shape; host     §3.2 + Task 03    list items CAN be loaded (§§4–5),
+   fetched, collections init'd      §§4–5             so thin summaries would hide data
+   rather than summary DTOs          vs alternative    for no runtime gain
+   To-one fetch into paginated       §4 + Task 03      safe (no dup rows, no memory
+   queries: yes; collection: never   §6.1              paging); the line is structural
+   Init in service, map in resource  §5 + Task 03 §8   service owns tx lifetime; DTOs
+                                                       never enter it
+   currency required, not defaulted  §3.6 + Task 01    null would clobber "MAD" →
+   at boundary                        default           persist-time 500
+   Coerce pagination, echo applied   §3.5 (no 400      no 400 type exists; 500 on a
+   values                              type exists)     public ?page=-1 unacceptable
+   HOST gates on 4 methods; search/  §3.3 + Task 05    role denial incl. anonymous→403
+   get public; ADMIN can't list       D2 mechanics      is correct mechanics, flagged
+                                                       product reading
+
+ --------------------------------------------------------------------------------
+  DESIGN PATTERNS USED IN TASK 07
+ --------------------------------------------------------------------------------
+   18) Eager-Boundary Initialization (companion §§4–5)
+      Definition: Associations needed past a boundary are loaded before crossing
+      it, each by the mechanism the query shape allows.
+      Applied: to-one via query fetch (pagination-safe) + to-many via explicit
+               initialize loop (in-tx) → DTO mapping reads freely post-tx.
+      Why: Keeps entities (not DTOs) crossing the service boundary while making
+           post-tx reads total — the alternative is either lazy 500s or DTOs in
+           the service, both rejected.
+
+   19) Un-settable by Absence (toListing, §7)
+      Definition: Instead of validating-away forbidden fields, the type cannot
+      carry them.
+      Applied: No host/status/id on ListingRequest; update can't change status
+               because there is no field to put it in — enforced by absence, and
+               absence can't be forgotten like a check can.
+      Why: Same spirit as requireOwner-shared-once (Task 03): properties that
+           hold structurally beat properties that hold by vigilance.
+
+   Patterns deliberately NOT introduced:
+    - Summary/separate list DTO — would duplicate mapping surface to dodge a
+      loading problem this task actually solved.
+    - A 400 type for pagination/filter contradictions — no family member exists,
+      and inventing one here would pre-empt a cross-cutting decision.
+    - Sort parameter — unevidenced in-repo; speculative signature churn refused.
+
+ --------------------------------------------------------------------------------
+  VERIFICATION
+ --------------------------------------------------------------------------------
+   Static (§9.1–§9.8 all green):
+   - 6 new files; 3 edited exactly as specified (RestApplication +1; repo +6/−2:
+     JPQL word, Criteria line, import; service +15: 2 calls + helper). No pom/
+     persistence change. Compile green (after fixing my own 4-arg envelope bug —
+     task + code corrected together).
+   - javax 0 (dto+api); request=class/responses=records; resource thin
+     (Pageable import only; no crypto/tx/repo/EM); HostSummary + ListingResponse
+     contact-field-free; getTransaction still TransactionRunner-only.
+
+   Live (§10.3, isolated Tomcat :8081, fresh slate — all green):
+   - register HOST 201 (verified:false asserted) → login 200
+   - create unverified → 403 EMAIL_NOT_VERIFIED envelope (guard FIRST)
+   - psql flip (labeled scaffolding) → create 201 full body (host id+name only,
+     photos:[], ACTIVE, ISO dates, activities present)
+   - search envelope 1/1/1 + getById same shape (lazy contract proven live)
+   - VISITOR PUT → 403 framework page; non-owner HOST PUT → 403 NOT_OWNER
+     envelope (both 403s observed, told apart — mechanics documented)
+   - owner PUT 200 (updatedAt now set) → DELETE 204 empty → search empty
+     (totalPages 0, no div-zero) → getById 200 REMOVED (Task-03 flag live)
+   - mine → 1 REMOVED item (all-statuses rule); missing title → 400 envelope;
+     size=1000 → echoed 100; page=-1 → echoed 0; no-token POST → 403 page
+   - Observed cosmetic: activities order not insertion-ordered after DB reload
+     (Set semantics — unordered by contract, not a defect).
+
+   Harness notes (test-side only, app untouched): PowerShell 5.1 mangles non-ASCII
+   JSON bodies (Latin-1 vs UTF-8 — use ASCII fixtures); `Del` collides with the
+   Remove-Item alias (renamed helper). The é-400 incidentally reconfirmed the
+   malformed-JSON → default-400-page mechanics.
+
+ --------------------------------------------------------------------------------
+  AMBIGUITIES & FLAGS
+ --------------------------------------------------------------------------------
+   1. Spec §6 shapes unverifiable (no spec file) — implemented literally per the
+      task's §6/§7 code. /mine shape (full, not summary) is the task's stated
+      assumption, flagged in-task.
+   2. Register-no-tokens now one task further baked in (201 user-only consumed
+      by this e2e's login step). Auto-login settlement more urgent, not less.
+   3. Envelope shape baked 5th place (PagedResponse joins). Confirmation ideal
+      before Booking lists copy it.
+   4. REMOVED-readable-by-id observed live (200, public). Owner-only rule still
+      the recommended resolution — needs a decision before real clients
+      bookmark dead listings.
+   5. 409-with-active-bookings: service branch exists, no HTTP path to trigger
+      it until BookingService lands. Not provable, not faked — stated.
+
+ --------------------------------------------------------------------------------
+  REPORT BACK (per TASK-07 §10)
+ --------------------------------------------------------------------------------
+   1. Files: dto/{PagedResponse, listing×4}.java; api/ListingResource.java.
+      Edits: RestApplication +1; repo to-one fetches; service init loops —
+      unavoidable (post-tx mapping 500s without them), minimal (20+/−2 lines),
+      layering intact (entities cross, DTOs don't enter).
+   2. SERVICE FIT: clean — all six signatures fit 1:1. update's carrier convention
+      survives real JSON-built carriers (Jackson Listing → service copies 8 fields).
+      No workaround anywhere; "flag, don't work around" untriggered.
+   3. E2E: full §10.3 matrix above + extras (both-403 contrast, clamp/coerce echoes,
+      mine-after-delete, REMOVED-read). First Listings traffic ever served.
+   4. Spec §6: implemented literally; residual risks are flags 1–5 above.
+
+  Suggested commit:
+   feat: add Listing DTOs and ListingResource
+
+   Request bean with boundary validation (@Size caps mirror entity
+   columns; currency required so null can't overwrite the MAD default);
+   response records with from() factories — HostSummary is id+fullName
+   only, no contact data on public endpoints. PagedResponse is the
+   shared generic pagination envelope with totalPages computed once.
+   ListingResource is thin: role gates + mapping + statuses, all rules
+   in the unchanged-method-shape ListingService. Two companion edits
+   make lazy associations JSON-safe: JOIN FETCH host (to-one, pagination
+   -safe) in the repository, per-item initialize of photos+activities in
+   the service — entities still cross layers, DTOs still don't enter it.
+   No new dependencies, no photo endpoints yet.
+================================================================================
+
+
+================================================================================
+ TASK 08 — BookingService
+ DarCom Co-Hosting Platform (darcom-backend)
+ Stack: Java 21 · Jakarta EE 10 · Hibernate 6.4.4 · PostgreSQL · Jersey 3.1.1
+        + zero new dependencies (like Tasks 03 and 07)
+================================================================================
+
+ Goal: The service behind the spec's §7 booking endpoints — including the
+       auto-reject workflow deferred since Task 03. Takes the overlap *query*
+       Task 02 built and finally gives it a caller; exercises the
+       `canTransitionTo` machine Task 01 built with the service-side
+       authorization it was designed to be paired with.
+
+ Deliverable: 1 new file, 1 edited (6 additive changes), 0 new dependencies.
+              No DTOs/resource (next task — Auth/Listing split repeated).
+              No new exception type: 9 fresh codes on the 3 existing types.
+
+ Files created (1): service/BookingService.java
+   create / getById / findMine / findReceived / updateStatus / cancel
+
+ File edited (1): repository/BookingRepository.java (+50/−12)
+   4.1 findByVisitor +JOIN FETCH listing; 4.2 findByListingHost +JOIN FETCH
+   listing+visitor (to-one: pagination-safe, Task 07 §4 rule restated);
+   4.3 findOverlapping excludeBookingId nullable (null = create-time, value =
+   auto-reject; zero pre-existing callers, verified by grep); 4.4 new
+   findByIdWithDetails (no DISTINCT — to-one joins never duplicate);
+   4.5/4.6 countByVisitor + countByListingHost (countByHost-style gaps).
+   +1 import (Optional). existsActiveBookingForListing untouched.
+
+ No pom.xml / persistence.xml change. No domain/persistence/exception/security/
+ api/dto change. No other repository touched.
+
+ --------------------------------------------------------------------------------
+  CLASS / FUNCTION DEFINITIONS — TASK 08
+ --------------------------------------------------------------------------------
+
+ service.BookingService (stateless, `new`-constructed, TransactionRunner
+ throughout — Task 03 §3 conventions unchanged):
+
+ - create(visitor, listingId, checkIn, checkOut, guestsCount, message):
+   INVALID_DATE_RANGE up front on null/non-after checkout (pre-transaction,
+   register-role-check-shaped) — fulfills Booking's service-layer TODO, a
+   class-level rule Bean Validation can't express. Null dates / non-positive
+   guests need no line: JPA AUTO 400s them at persist via the mapper. Then:
+   LISTING_NOT_FOUND → LISTING_NOT_ACTIVE (non-ACTIVE) →
+   CANNOT_BOOK_OWN_LISTING (host==visitor id check) → DATES_UNAVAILABLE
+   (overlap vs CONFIRMED only — PENDING overlaps allowed, that's what
+   auto-reject is for) → persist PENDING → optional first Message
+   (visitor→host, same tx) → return booking. Plain findById suffices: em.find
+   loads the scalars any future DTO needs; host FK proxy is enough for the
+   checks and the message receiver.
+ - getById(currentUser, bookingId): WithDetails + three-way viewer check
+   (visitor id / listing-host id / ADMIN role) else NOT_AUTHORIZED. Id
+   comparisons never load beyond the fetched graph (§3.4 holds: host id rides
+   the lazy proxy safely).
+ - findMine / findReceived(host, status?, pageable): items + matching count →
+   PagedResult. Status filter mirrors the repo's nullable pattern.
+ - updateStatus(host, bookingId, newStatus): NOT_LISTING_HOST → narrow to
+   CONFIRMED/REJECTED (CANCELLED rejected BEFORE the machine — §3.1: passing
+   the machine ≠ authorized) → canTransitionTo → set+update → on CONFIRMED,
+   reject every other overlapping PENDING in the SAME tx (all-or-nothing with
+   the confirm). Returns the confirmed booking.
+ - cancel(visitor, bookingId): NOT_BOOKING_OWNER → machine→CANCELLED else
+   INVALID_STATUS_TRANSITION. Visitor-only; host path can't reach CANCELLED.
+
+ Error codes emitted: INVALID_DATE_RANGE, LISTING_NOT_FOUND (reused),
+ LISTING_NOT_ACTIVE, CANNOT_BOOK_OWN_LISTING, DATES_UNAVAILABLE,
+ BOOKING_NOT_FOUND, NOT_AUTHORIZED, NOT_LISTING_HOST (×2 paths: status + cancel
+ use their own), INVALID_STATUS_TRANSITION (×3 paths), NOT_BOOKING_OWNER.
+ Types: Conflict/NotFound/Forbidden only — the four-type family scales to a
+ third domain without growing (§3.3 confirmed live: no Unauthorized needed).
+
+ --------------------------------------------------------------------------------
+  PURPOSE — WHAT TASK 08 IS FOR, AND WHY IT FOLLOWS 01–07
+ --------------------------------------------------------------------------------
+
+  THE SHORT VERSION
+    Tasks 02–03 left a loaded gun on the table: an overlap query with no caller
+    and an auto-reject workflow explicitly deferred. Task 07 left a 409 branch
+    (`existsActiveBookingForListing`) with no HTTP-reachable way to trigger it.
+    Task 08 connects both ends — the first service whose core value is
+    orchestration across time (availability then, auto-reject later) rather
+    than single-row CRUD.
+
+  WHAT EACH PRIOR TASK GAVE (all used, none modified except the repo)
+    - 01: Booking entity (all setters consumed) + the state machine, finally
+      paired with its designed counterpart (service-side who-may-ask). The
+      entity TODO named this layer; this task fulfills it.
+    - 02: findOverlapping (both call shapes via the nullable widen), the four
+      list/count query skeletons (fetch + counts added, logic untouched),
+      half-open overlap semantics (turnover allowed, zero-night rejected).
+    - 03: TransactionRunner (rotation-grade atomicity for confirm+rejects),
+      the exception family (+codes only), the companion-edit precedent (§6),
+      the delete-guard this task's bookings now arm (both directions: the guard
+      blocks delete while active bookings exist; the service creates them).
+    - 04: pre-transaction field-check shape (role check → date check);
+      exception-code conventions. No auth code needed — callers pass Users.
+    - 05: filter already rejects blocked callers, so the service needs no
+      blocked-check (same reasoning as Task 07's resources).
+    - 06: ValidationExceptionMapper as the backstop making explicit null/guest
+      checks redundant (JPA AUTO → 400).
+    - 07: to-one-fetch pagination rule restated for Booking's two ManyToOnes;
+      countByHost-gap precedent cited twice; thin-service conventions.
+
+  WHAT TASK 08 ADDS BACK
+    - The deferred workflow, closed: confirm-time auto-reject in one tx.
+    - Six repo methods future BookingResource reads directly (fetch-joined
+      lists + WithDetails + counts — the next task needs zero repo work).
+    - Proof the exception family covers a third domain with codes alone.
+
+  PROBLEMS SOLVED FIRST
+    - Date validation placement: explicit service check ONLY where no other
+      layer can express it (range); nulls/negatives left to the deterministic
+      JPA-AUTO 400 path rather than duplicated. One rule, one home each.
+    - Nullable-exclude vs second method: one query, null-means-all — no
+      near-duplicate overlap method to drift apart.
+
+  DELIBERATELY NOT DONE: BookingResource/DTOs (next); notifications (email
+  provider); admin status override (flagged — §8.3: viewer ≠ mutator, mutator
+  needs a new method if spec wants it); pricing beyond nights×price (spec's
+  simple rule, no fees/deposits); tests; everything earlier still deferred.
+
+ --------------------------------------------------------------------------------
+  TASK 08 CONVENTIONS — AND WHERE EACH ONE CAME FROM
+ --------------------------------------------------------------------------------
+
+   Convention                        Origin            Why it exists
+   --------------------------------- ----------------- ---------------------------------
+   Machine says legal, service says  Task 01 §4.1      PENDING→CANCELLED passes the
+   who may ask (two checks, always)   boundary          machine but fails the role gate;
+                                                       either check alone under-
+                                                       authorizes
+   To-one fetch into paginated       Task 07 §4 +      can't duplicate rows (each
+   queries: yes (both sides)         Task 03 §6.1      Booking has exactly one each)
+   Counts pair every paginated list  Task 03           envelope needs totalItems;
+   (both booking lists)              countByHost gap   same miss, fixed the same way
+   Null-exclude widens, never forks  §4.3              two overlap call shapes, one
+   the overlap query                                   query, null = exclude nothing
+   Date-range checked pre-tx;        Booking TODO +    range inexpressible in BV;
+   nulls/negatives via JPA AUTO      Task 04 shape     the rest already 400s
+   No new exception type, ever       Task 03 family    9 codes on 3 types suffice;
+   (this task)                                         family scales by code
+
+ --------------------------------------------------------------------------------
+  DESIGN PATTERNS USED IN TASK 08
+ --------------------------------------------------------------------------------
+   20) Saga-Step Atomicity / All-or-Nothing Side Effects (auto-reject)
+      Definition: A primary state change and its triggered consequences commit
+      or roll back as one unit — no observable intermediate state.
+      Applied: confirm + N rejections inside a single TransactionRunner.call.
+      Why: A crash between confirm and rejects would leave overlapping PENDINGs
+           against a CONFIRMED booking — the exact inconsistency the workflow
+           exists to prevent.
+
+   21) Capability Narrowing Before Legality (updateStatus ordering)
+      Definition: Check whether the caller may request this *kind* of action
+      before checking whether the action is *valid* on the object.
+      Applied: CONFIRMED/REJECTED-only gate runs before canTransitionTo.
+      Why: Error precedence is information design — "not your action" must win
+           over "not a legal move," or callers learn machine details about
+           actions they can never perform.
+
+   Patterns deliberately NOT introduced:
+    - A booking-state observer/event for auto-reject — the loop is three lines
+      in the same transaction; an event bus would add failure modes to the one
+      place demanding atomicity.
+    - A separate availability service — one predicate call, not a layer.
+
+ --------------------------------------------------------------------------------
+  VERIFICATION
+ --------------------------------------------------------------------------------
+   Static (§7.1–§7.8 all green):
+   - 1 new + 1 edited (+50/−12, exactly the six §4 changes); no pom change;
+     compile green; getTransaction only TransactionRunner; throws only the 3
+     types (14 sites); narrowing-before-machine order confirmed by line reads;
+     auto-reject targets List.of(PENDING)→REJECTED; date check pre-tx.
+
+   Live — plain-Java BookingSmoke (temp, NOT repo §0): 28/28 ALL_GREEN.
+   (No HTTP: BookingResource is next task. Script drop+creates a clean slate;
+   idle Tomcat untouched.)
+   - create: zero-night/inverted/null dates → 409 INVALID_DATE_RANGE (×3);
+     own-listing 409; REMOVED-listing 409; happy PENDING + first Message row
+     verified via findThread; PENDING-overlap allowed; post-confirm overlap
+     409 DATES_UNAVAILABLE; turnover checkout==checkin allowed.
+   - updateStatus: CONFIRMED ok; overlapping PENDING auto-REJECTED (read back);
+     non-host 403; CANCELLED-target 409 pre-machine; double-confirm 409 machine.
+   - cancel: PENDING→CANCELLED; REJECTED-cancel 409; another visitor's 403.
+   - getById: visitor/host/admin ok; stranger 403 NOT_AUTHORIZED; unknown 404.
+   - findMine == 1 (+listing title readable post-tx: fetch-join proven);
+     findReceived all == 3; PENDING == 0; REJECTED == 1 (counts exact).
+
+   Harness notes: services read verified/role off the PASSED instance
+   pre-transaction — the script mirrors DB flips onto in-memory objects
+   (same lesson as Task 07's e2e, automated here); `Del`-style alias and
+   non-ASCII pitfalls avoided from prior sessions.
+
+ --------------------------------------------------------------------------------
+  AMBIGUITIES & FLAGS
+ --------------------------------------------------------------------------------
+   1. Admin mutator path (report §8.3): getById lets ADMIN view; NOTHING lets
+      admin change status. If spec §7 grants an override, it's a NEW method
+      (e.g. forceStatus with its own code), not a role added to updateStatus/
+      cancel — narrowing-before-machine must survive it.
+   2. PATCH .../cancel shape: implemented as the task's stated endpoint; no
+      spec file to confirm verb-vs-status-body conventions against.
+   3. Message-sending failures (e.g. blank-body edge): guarded by isBlank;
+      @NotBlank entity backstop exists. No partial-failure mode: message +
+      booking share the tx.
+   4. 409-with-active-bookings now HTTP-triggerable in principle (bookings
+      exist!), but still no BookingResource to drive it — Task 07's "service-
+      covered only" note upgrades to "creatable, not yet drivable."
+
+ --------------------------------------------------------------------------------
+  REPORT BACK (per TASK-08 §8)
+ --------------------------------------------------------------------------------
+   1. Files: service/BookingService.java (new, 6 methods); repo +6 changes
+      (2 to-one fetches, nullable exclude, WithDetails, 2 counts).
+   2. §6 deferred items still deferred: resource/DTOs (next), notifications
+      (email provider), plus the delete-guard coverage note (now armed: active
+      bookings are creatable as of this task).
+   3. FLAG: cancel visitor-only + updateStatus host-only, no admin override —
+      reasonable §7 reading (viewer ≠ mutator); override = new method, not a
+      widened check, if spec disagrees.
+   4. Spec §7: implemented literally per the task; no spec file in repo —
+      overlap/auto-reject wording taken on the task's word (half-open turnover
+      rule cross-checked against Task 02's repo javadoc, which matches).
+
+  Suggested commit:
+   feat: add BookingService — create, status transitions, auto-reject
+
+   The workflow deferred since Task 03: updateStatus runs the overlap
+   query (Task 02) and rejects every overlapping PENDING booking in the
+   same transaction as the confirm. Host is restricted to CONFIRMED/
+   REJECTED; CANCELLED is cancel()'s path, visitor-only — canTransitionTo
+   says what's legal, the service says who may ask for it (Task 01 §4.1's
+   original boundary, finally exercised). Six companion edits to
+   BookingRepository: listing/visitor fetch-joined into the two list
+   queries (safe under pagination — ManyToOne, not a collection),
+   findByIdWithDetails, two count methods, and a nullable excludeBookingId
+   so the same overlap query serves both create-time availability and
+   confirm-time auto-reject. No new exception type needed. create()
+   also enforces checkOut > checkIn up front (INVALID_DATE_RANGE) — the
+   class-level rule Bean Validation can't express, per Booking's TODO.
+================================================================================
