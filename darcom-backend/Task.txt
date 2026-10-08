@@ -626,6 +626,22 @@
      400 blank name. Email unchangeable by absence. No pom change.
   ================================================================================
 
+  ================================================================================
+   TASK 09 Phase 3 — Messaging (condensed mirror)
+  ================================================================================
+   New: MessageService (send/thread/conversations) + Conversation carrier;
+     repo +5 methods (fetches, counts, counterpart ids, latest-per-group,
+     unread); dto/message ×4; MessageResource + ListingMessageResource;
+     ResourceSupport (helpers centralized; 3 old resources migrated).
+   Rules: structural access (empty, never 403); host→toUserId required (409);
+     withUser iff multi-thread host (409); mark-read same-tx; conversations via
+     NOT EXISTS latest-row (GROUP BY+CASE rejected by Postgres, proven live).
+   Verified live: full exchange, ordering, read flags, conversation rows/counts/
+     unread asymmetries, both 409s, 400/401 edges, post-migration spot checks.
+   Deploy fix: send() response 500 (proxy receiver name) → initialize in-tx.
+  ================================================================================
+
+
 
 
 

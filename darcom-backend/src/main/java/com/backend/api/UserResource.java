@@ -1,6 +1,5 @@
 package com.backend.api;
 
-import com.backend.api.security.UserSecurityContext;
 import com.backend.domain.User;
 import com.backend.dto.auth.UserResponse;
 import com.backend.dto.user.UpdateProfileRequest;
@@ -17,6 +16,8 @@ import jakarta.ws.rs.container.ContainerRequestContext;
 import jakarta.ws.rs.core.Context;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
+
+import static com.backend.api.ResourceSupport.currentUser;
 
 @Path("/users/me")
 @RolesAllowed({"HOST", "VISITOR", "ADMIN"})
@@ -38,9 +39,5 @@ public class UserResource {
     public Response updateMe(@Valid UpdateProfileRequest request, @Context ContainerRequestContext ctx) {
         User updated = userService.updateProfile(currentUser(ctx), request.getFullName(), request.getPhone());
         return Response.ok(UserResponse.from(updated)).build();
-    }
-
-    private User currentUser(ContainerRequestContext ctx) {
-        return ((UserSecurityContext) ctx.getSecurityContext()).getUser();
     }
 }

@@ -1,8 +1,6 @@
 package com.backend.api;
 
-import com.backend.api.security.UserSecurityContext;
 import com.backend.domain.Booking;
-import com.backend.domain.User;
 import com.backend.domain.enums.BookingStatus;
 import com.backend.dto.PagedResponse;
 import com.backend.dto.booking.BookingResponse;
@@ -28,10 +26,11 @@ import jakarta.ws.rs.core.Response;
 import java.util.List;
 import java.util.UUID;
 
+import static com.backend.api.ResourceSupport.currentUser;
+import static com.backend.api.ResourceSupport.normalizePageable;
+
 @Path("/bookings")
 public class BookingResource {
-
-    private static final int MAX_SIZE = 100;
 
     private final BookingService bookingService = new BookingService();
 
@@ -91,14 +90,6 @@ public class BookingResource {
     @Produces(MediaType.APPLICATION_JSON)
     public Response cancel(@PathParam("id") UUID id, @Context ContainerRequestContext ctx) {
         return Response.ok(BookingResponse.from(bookingService.cancel(currentUser(ctx), id))).build();
-    }
-
-    private User currentUser(ContainerRequestContext ctx) {
-        return ((UserSecurityContext) ctx.getSecurityContext()).getUser();
-    }
-
-    private Pageable normalizePageable(int page, int size) {
-        return new Pageable(Math.max(0, page), Math.min(MAX_SIZE, Math.max(1, size)));
     }
 
     private PagedResponse<BookingResponse> toPagedResponse(PagedResult<Booking> result, Pageable pageable) {

@@ -1,8 +1,6 @@
 package com.backend.api;
 
-import com.backend.api.security.UserSecurityContext;
 import com.backend.domain.Listing;
-import com.backend.domain.User;
 import com.backend.dto.PagedResponse;
 import com.backend.dto.listing.ListingRequest;
 import com.backend.dto.listing.ListingResponse;
@@ -33,12 +31,11 @@ import java.math.BigDecimal;
 import java.util.List;
 import java.util.UUID;
 
+import static com.backend.api.ResourceSupport.currentUser;
+import static com.backend.api.ResourceSupport.normalizePageable;
+
 @Path("/listings")
 public class ListingResource {
-
-    private static final int DEFAULT_PAGE = 0;
-    private static final int DEFAULT_SIZE = 20;
-    private static final int MAX_SIZE = 100;
 
     private final ListingService listingService = new ListingService();
 
@@ -110,14 +107,6 @@ public class ListingResource {
     public Response delete(@PathParam("id") UUID id, @Context ContainerRequestContext ctx) {
         listingService.delete(currentUser(ctx), id);
         return Response.noContent().build();
-    }
-
-    private User currentUser(ContainerRequestContext ctx) {
-        return ((UserSecurityContext) ctx.getSecurityContext()).getUser();
-    }
-
-    private Pageable normalizePageable(int page, int size) {
-        return new Pageable(Math.max(0, page), Math.min(MAX_SIZE, Math.max(1, size)));
     }
 
     private PagedResponse<ListingResponse> toPagedResponse(PagedResult<Listing> result, Pageable pageable) {

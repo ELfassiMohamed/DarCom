@@ -1,6 +1,5 @@
 package com.backend.api;
 
-import com.backend.api.security.UserSecurityContext;
 import com.backend.domain.User;
 import com.backend.dto.booking.BookingRequest;
 import com.backend.dto.booking.BookingResponse;
@@ -19,6 +18,8 @@ import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 
 import java.util.UUID;
+
+import static com.backend.api.ResourceSupport.currentUser;
 
 /**
  * Create lives here — nested under its listing — because a JAX-RS class has one
@@ -40,7 +41,7 @@ public class ListingBookingResource {
     public Response create(@PathParam("listingId") UUID listingId,
                            @Valid BookingRequest request,
                            @Context ContainerRequestContext ctx) {
-        User visitor = ((UserSecurityContext) ctx.getSecurityContext()).getUser();
+        User visitor = currentUser(ctx);
         return Response.status(Response.Status.CREATED).entity(BookingResponse.from(
                 bookingService.create(visitor, listingId, request.getCheckIn(), request.getCheckOut(),
                         request.getGuestsCount(), request.getMessage()))).build();

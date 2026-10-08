@@ -2805,3 +2805,38 @@
   Suggested commit:
    feat(profile): add /users/me endpoints and health check
 ================================================================================
+
+
+================================================================================
+ TASK 09 Phase 3 — Messaging (spec §8): service, threads, conversations
+================================================================================
+ New: service/MessageService (send/getThread/getConversations) + service/
+ Conversation carrier (AuthResult precedent — entities cross, DTO built in
+ resource); repository/MessageRepository +5 methods (findThread fetch-joins,
+ countThread, findCounterpartIds, findLatestPerGroup, countConversations,
+ countUnread); dto/message ×4 (SendMessageRequest, MessageResponse,
+ ParticipantSummary, ConversationSummary); api/MessageResource
+ (/messages/conversations) + api/ListingMessageResource (nested POST + thread);
+ api/ResourceSupport (shared currentUser/normalizePageable — 4th copy triggered
+ the extraction); migrated Listing/Booking/ListingBooking/User resources to it
+ (dead DEFAULT_PAGE/SIZE consts removed with the migration).
+ Design: access structural (counterpart forced/owned — empty instead of 403,
+ reveals nothing); host send requires toUserId (409 TO_USER_REQUIRED);
+ withUser required iff host has >1 thread (409 WITH_USER_REQUIRED); reads mark
+ addressed-to-caller as read same-tx (unreadCount moves); conversations =
+ latest-per-group rows (NOT EXISTS, no GROUP BY — Postgres rejects CASE-with-
+ binds in GROUP BY, proven live) + Java counterpart resolution + indexed unread
+ point queries (≈2+N cheap queries, exact paging, deterministic tiebreak).
+ Edited RestApplication (+2 registers). No pom change.
+
+ Live (:8081/api/v1, fresh slate): POST 201 full body; host TO_USER_REQUIRED
+ 409; thread chronological + readAts set; conversations shape/counts/unread
+ exact (incl. cross-user unread asymmetry); B-post → WITH_USER_REQUIRED 409 →
+ withUser read; blank-body 400; no-token 401. Post-migration spot checks:
+ login/search/mine/bookings-mine all 200.
+ DEPLOY FIX (found live): send() 500'd its own 201 — receiver proxy name unread
+ after commit → Hibernate.initialize(receiver) in-tx. Same class as D1.
+
+  Suggested commit:
+   feat(messaging): add MessageService, threads and conversations
+================================================================================
