@@ -2840,3 +2840,31 @@
   Suggested commit:
    feat(messaging): add MessageService, threads and conversations
 ================================================================================
+
+
+================================================================================
+ TASK 09 Phase 4 — Reports + admin (spec §9, §10)
+================================================================================
+ New: service/ReportService (file/getAll/getById/review) + service/UserDetail
+ carrier; UserService extended (getAll/getDetail/block/unblock); repository/
+ ReportRepository (findByStatus fetches, findByIdWithDetails, countByStatus);
+ dto/report ×3 (Create/Update/Response, ParticipantSummary reuse), dto/admin ×2
+ (AdminUserResponse composes UserResponse + counts; BlockUserRequest accepted
+ but not persisted — no reader exists, documented); api/ReportResource,
+ AdminReportResource, AdminUserResource (ADMIN gates); RestApplication +3.
+ Rules: reported target must be a HOST (404 HOST_NOT_FOUND otherwise); review
+ accepts any status (no machine in spec — none invented) + reviewedAt stamp;
+ block cascades ACTIVE→HIDDEN same-tx; unblock never restores (spec explicit).
+ No pom change.
+
+ Live (:8081/api/v1, fresh slate): file ±listing 201 OPEN; non-host 404;
+ admin list/filter totals exact; VISITOR admin → 403 page; detail 200 with
+ listing/report counts exact; review ACTIONED persisted (notes+reviewedAt);
+ users list role/search filters exact; block → true; blocked caller → 401
+ (filter, before any resource); unblock → false; listing stays HIDDEN
+ (getById + DB cross-check) while public search excludes it. Clean phase:
+ zero code fixes needed post-deploy (all shapes held first try).
+
+  Suggested commit:
+   feat(admin): add reports and admin user management
+================================================================================

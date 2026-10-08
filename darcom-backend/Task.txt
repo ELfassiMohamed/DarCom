@@ -641,6 +641,25 @@
    Deploy fix: send() response 500 (proxy receiver name) → initialize in-tx.
   ================================================================================
 
+  ================================================================================
+   TASK 09 Phase 4 — Reports + admin (condensed mirror)
+  ================================================================================
+   New: ReportService (file/getAll/getById/review) + UserDetail carrier;
+     UserService +getAll/getDetail/block/unblock; repo: findByStatus fetches,
+     findByIdWithDetails, countByStatus; dto/report ×3 (ParticipantSummary
+     reused), dto/admin ×2 (AdminUserResponse composes UserResponse+counts;
+     block reason accepted, not persisted — no reader exists); 3 resources
+     (VISITOR file, ADMIN ×2); +3 registers. No pom change.
+   Rules: reported target must be HOST (404 else); review any status, no
+     invented machine; block cascades ACTIVE→HIDDEN same-tx; unblock never
+     restores (spec explicit).
+   Verified live: file ±listing 201; non-host 404; lists/filters/counts exact;
+     VISITOR admin 403; detail counts exact; review persisted; block → cascade
+     proven (mine-blocked→401 filter, getById+DB show HIDDEN); unblock → no
+     restore. Zero code fixes post-deploy.
+  ================================================================================
+
+
 
 
 
