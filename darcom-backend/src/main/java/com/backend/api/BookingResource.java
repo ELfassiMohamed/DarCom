@@ -29,7 +29,12 @@ import java.util.UUID;
 import static com.backend.api.ResourceSupport.currentUser;
 import static com.backend.api.ResourceSupport.normalizePageable;
 
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.tags.Tag;
+
 @Path("/bookings")
+@Tag(name = "Bookings", description = "Request, review and cancel stays")
 public class BookingResource {
 
     private final BookingService bookingService = new BookingService();
@@ -39,6 +44,10 @@ public class BookingResource {
     @Path("/{id}")
     @RolesAllowed({"HOST", "VISITOR", "ADMIN"})
     @Produces(MediaType.APPLICATION_JSON)
+    @Operation(summary = "Get one booking (visitor, host or admin)")
+    @ApiResponse(responseCode = "200", description = "Full booking")
+    @ApiResponse(responseCode = "403", description = "Not a participant")
+    @ApiResponse(responseCode = "404", description = "Booking not found")
     public Response getById(@PathParam("id") UUID id, @Context ContainerRequestContext ctx) {
         return Response.ok(BookingResponse.from(bookingService.getById(currentUser(ctx), id))).build();
     }
@@ -48,6 +57,8 @@ public class BookingResource {
     @Path("/mine")
     @RolesAllowed("VISITOR")
     @Produces(MediaType.APPLICATION_JSON)
+    @Operation(summary = "List the caller's bookings as visitor")
+    @ApiResponse(responseCode = "200", description = "Paginated bookings")
     public Response findMine(@Context ContainerRequestContext ctx,
                              @QueryParam("page") @DefaultValue("0") int page,
                              @QueryParam("size") @DefaultValue("20") int size) {
@@ -61,6 +72,8 @@ public class BookingResource {
     @Path("/received")
     @RolesAllowed("HOST")
     @Produces(MediaType.APPLICATION_JSON)
+    @Operation(summary = "List incoming booking requests across the caller's listings")
+    @ApiResponse(responseCode = "200", description = "Paginated bookings")
     public Response findReceived(@Context ContainerRequestContext ctx,
                                  @QueryParam("status") BookingStatus status,
                                  @QueryParam("page") @DefaultValue("0") int page,
@@ -75,6 +88,11 @@ public class BookingResource {
     @Path("/{id}/status")
     @RolesAllowed("HOST")
     @Produces(MediaType.APPLICATION_JSON)
+    @Operation(summary = "Confirm or reject a booking (confirm auto-rejects overlapping pendings)")
+    @ApiResponse(responseCode = "200", description = "Updated booking")
+    @ApiResponse(responseCode = "403", description = "Not the listing host")
+    @ApiResponse(responseCode = "404", description = "Booking not found")
+    @ApiResponse(responseCode = "409", description = "Illegal transition")
     public Response updateStatus(@PathParam("id") UUID id,
                                  @Valid UpdateBookingStatusRequest request,
                                  @Context ContainerRequestContext ctx) {
@@ -88,6 +106,11 @@ public class BookingResource {
     @Path("/{id}/cancel")
     @RolesAllowed("VISITOR")
     @Produces(MediaType.APPLICATION_JSON)
+    @Operation(summary = "Cancel the caller's own booking")
+    @ApiResponse(responseCode = "200", description = "Cancelled booking")
+    @ApiResponse(responseCode = "403", description = "Not the booking owner")
+    @ApiResponse(responseCode = "404", description = "Booking not found")
+    @ApiResponse(responseCode = "409", description = "Already terminal")
     public Response cancel(@PathParam("id") UUID id, @Context ContainerRequestContext ctx) {
         return Response.ok(BookingResponse.from(bookingService.cancel(currentUser(ctx), id))).build();
     }

@@ -2868,3 +2868,31 @@
   Suggested commit:
    feat(admin): add reports and admin user management
 ================================================================================
+
+
+================================================================================
+ TASK 09 Phase 5 — OpenAPI docs (spec: industry-standard, reviewer-visible)
+================================================================================
+ New deps: swagger-jaxrs2-jakarta 2.2.28 (Jakarta flavor) + swagger-ui 5.18.2
+ webjar (both resolved first try). RestApplication: OpenApiResource registered
+ + @OpenAPIDefinition/@SecurityScheme(bearer JWT). All 11 resources: @Tag;
+ every method @Operation + @ApiResponse for success + documented non-401 errors
+ (401 listed only where endpoint logic produces it — credentials/refresh —
+ mirroring the spec's own implicit-401 convention). New DocsRedirect servlet
+ (/docs → webjar UI pre-pointed at /api/v1/openapi.json; UI version constant
+ kept in sync with pom by comment).
+ DEPLOY FIX (found live): openapi.json 401'd — Jersey routes it through the
+ filter and the third-party class carries no @PermitAll. Fix: exact-match
+ allowlist (openapi.json/yaml) in the filter, documented; alternatives
+ (subclass-and-annotate, path-prefix permit) rejected as fragile/leaky.
+ HYGIENE FIND (live): openapi.json listed deleted WhoAmIResource paths —
+ stale .class files shipped because packaging never ran clean. Fix: always
+ `mvn clean package`; verified gone after rebuild (class absent + doc clean).
+ Live (:8081): openapi.json 200 (26 serving paths, 9 tags, operationIds,
+ error responses, bearer scheme); /docs → 302 → UI 200 with correct spec URL.
+ Regression sweep post-annotation/migration: health/register/login/listing/
+ booking/message/conversations/report/admin/me all green.
+
+  Suggested commit:
+   feat(docs): add OpenAPI annotations, spec JSON and Swagger UI
+================================================================================

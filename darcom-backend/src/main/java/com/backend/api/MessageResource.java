@@ -24,8 +24,13 @@ import java.util.List;
 import static com.backend.api.ResourceSupport.currentUser;
 import static com.backend.api.ResourceSupport.normalizePageable;
 
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.tags.Tag;
+
 @Path("/messages")
 @RolesAllowed({"HOST", "VISITOR", "ADMIN"})
+@Tag(name = "Messaging", description = "Listing-scoped threads and conversation overview")
 public class MessageResource {
 
     private final MessageService messageService = new MessageService();
@@ -34,6 +39,8 @@ public class MessageResource {
     @GET
     @Path("/conversations")
     @Produces(MediaType.APPLICATION_JSON)
+    @Operation(summary = "List conversation overviews with unread counts")
+    @ApiResponse(responseCode = "200", description = "Paginated conversations")
     public Response conversations(@Context ContainerRequestContext ctx,
                                   @QueryParam("page") @DefaultValue("0") int page,
                                   @QueryParam("size") @DefaultValue("20") int size) {

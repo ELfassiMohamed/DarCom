@@ -18,6 +18,7 @@ import jakarta.ws.rs.core.HttpHeaders;
 import jakarta.ws.rs.ext.Provider;
 
 import java.lang.reflect.Method;
+import java.util.List;
 import java.util.UUID;
 
 @Provider
@@ -25,6 +26,14 @@ import java.util.UUID;
 public class AuthenticationFilter implements ContainerRequestFilter {
 
     private static final String BEARER_PREFIX = "Bearer ";
+
+    /**
+     * Jersey-served paths that are public by nature, not by annotation: the
+     * OpenAPI document comes from a third-party resource class we cannot put
+     * @PermitAll on, and the Swagger UI fetches it tokenless from the browser.
+     * Exact-match allowlist (not a prefix) so nothing else can slip through.
+     */
+    private static final List<String> PUBLIC_DOC_PATHS = List.of("openapi.json", "openapi.yaml");
 
     @Context
     private ResourceInfo resourceInfo;
@@ -35,7 +44,7 @@ public class AuthenticationFilter implements ContainerRequestFilter {
         if (authHeader == null || !authHeader.startsWith(BEARER_PREFIX)) {
             // Spec §1: Bearer endpoints 401 on a missing token. Public endpoints
             // carry @PermitAll and keep the old pass-through behavior.
-            if (isPublicEndpoint()) {
+            if (isPublicEndpoint() || isPublicDocPath(requestContext)) {
                 return;
             }
             throw new UnauthorizedException("UNAUTHENTICATED", "Authentication required");
@@ -56,6 +65,10 @@ public class AuthenticationFilter implements ContainerRequestFilter {
 
         requestContext.setSecurityContext(
                 new UserSecurityContext(user, requestContext.getSecurityContext().isSecure()));
+    }
+
+    private boolean isPublicDocPath(ContainerRequestContext requestContext) {
+        return PUBLIC_DOC_PATHS.contains(requestContext.getUriInfo().getPath());
     }
 
     private boolean isPublicEndpoint() {

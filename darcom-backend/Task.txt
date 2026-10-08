@@ -659,6 +659,19 @@
      restore. Zero code fixes post-deploy.
   ================================================================================
 
+  ================================================================================
+   TASK 09 Phase 5 — OpenAPI docs (condensed mirror)
+  ================================================================================
+   New deps: swagger-jaxrs2-jakarta + swagger-ui webjar. RestApplication:
+     OpenApiResource + @OpenAPIDefinition/@SecurityScheme. All 11 resources
+     tagged; every method operation + error responses (401 only where endpoint
+     logic produces it). DocsRedirect (/docs → UI pre-pointed at spec JSON).
+   Verified live: openapi.json 200 (26 paths, 9 tags, bearer scheme); UI 200.
+   Deploy fixes: openapi.json 401 → exact-match allowlist in filter; stale
+     WhoAmIResource paths in doc → always `mvn clean package` from here on.
+   Full-domain regression sweep green post-change.
+  ================================================================================
+
 
 
 

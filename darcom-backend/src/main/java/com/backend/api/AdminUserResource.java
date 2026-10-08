@@ -28,8 +28,13 @@ import java.util.UUID;
 
 import static com.backend.api.ResourceSupport.normalizePageable;
 
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.tags.Tag;
+
 @Path("/admin/users")
 @RolesAllowed("ADMIN")
+@Tag(name = "Admin - Users", description = "List, inspect, block and unblock users")
 public class AdminUserResource {
 
     private final UserService userService = new UserService();
@@ -37,6 +42,8 @@ public class AdminUserResource {
     /** GET /admin/users — all four filters optional. */
     @GET
     @Produces(MediaType.APPLICATION_JSON)
+    @Operation(summary = "List users with optional filters")
+    @ApiResponse(responseCode = "200", description = "Paginated users")
     public Response list(@QueryParam("role") UserRole role,
                          @QueryParam("verified") Boolean verified,
                          @QueryParam("blocked") Boolean blocked,
@@ -53,6 +60,9 @@ public class AdminUserResource {
     @GET
     @Path("/{id}")
     @Produces(MediaType.APPLICATION_JSON)
+    @Operation(summary = "Get one user with listing and report counts")
+    @ApiResponse(responseCode = "200", description = "User detail")
+    @ApiResponse(responseCode = "404", description = "User not found")
     public Response getById(@PathParam("id") UUID id) {
         UserDetail detail = userService.getDetail(id);
         return Response.ok(AdminUserResponse.from(detail)).build();
@@ -63,6 +73,9 @@ public class AdminUserResource {
     @Path("/{id}/block")
     @Consumes(MediaType.APPLICATION_JSON)
     @Produces(MediaType.APPLICATION_JSON)
+    @Operation(summary = "Block a user (hides their active listings)")
+    @ApiResponse(responseCode = "200", description = "Blocked user")
+    @ApiResponse(responseCode = "404", description = "User not found")
     public Response block(@PathParam("id") UUID id, BlockUserRequest request) {
         User blocked = userService.block(id);
         return Response.ok(UserResponse.from(blocked)).build();
@@ -72,6 +85,9 @@ public class AdminUserResource {
     @PATCH
     @Path("/{id}/unblock")
     @Produces(MediaType.APPLICATION_JSON)
+    @Operation(summary = "Unblock a user (listings stay hidden)")
+    @ApiResponse(responseCode = "200", description = "Unblocked user")
+    @ApiResponse(responseCode = "404", description = "User not found")
     public Response unblock(@PathParam("id") UUID id) {
         return Response.ok(UserResponse.from(userService.unblock(id))).build();
     }

@@ -21,6 +21,10 @@ import java.util.UUID;
 
 import static com.backend.api.ResourceSupport.currentUser;
 
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.tags.Tag;
+
 /**
  * Create lives here — nested under its listing — because a JAX-RS class has one
  * base path and this endpoint's root is /listings, not /bookings. Spec role:
@@ -30,6 +34,7 @@ import static com.backend.api.ResourceSupport.currentUser;
  */
 @Path("/listings/{listingId}/bookings")
 @RolesAllowed("VISITOR")
+@Tag(name = "Bookings", description = "Request, review and cancel stays")
 public class ListingBookingResource {
 
     private final BookingService bookingService = new BookingService();
@@ -38,6 +43,12 @@ public class ListingBookingResource {
     @POST
     @Consumes(MediaType.APPLICATION_JSON)
     @Produces(MediaType.APPLICATION_JSON)
+    @Operation(summary = "Request a booking on a listing")
+    @ApiResponse(responseCode = "201", description = "Pending booking")
+    @ApiResponse(responseCode = "400", description = "Validation error")
+    @ApiResponse(responseCode = "403", description = "Email not verified, or own listing")
+    @ApiResponse(responseCode = "404", description = "Listing not found")
+    @ApiResponse(responseCode = "409", description = "Inactive listing or dates unavailable")
     public Response create(@PathParam("listingId") UUID listingId,
                            @Valid BookingRequest request,
                            @Context ContainerRequestContext ctx) {

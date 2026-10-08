@@ -7,7 +7,27 @@ import org.glassfish.jersey.server.filter.RolesAllowedDynamicFeature;
 
 import jakarta.ws.rs.ApplicationPath;
 
+import io.swagger.v3.oas.annotations.OpenAPIDefinition;
+import io.swagger.v3.oas.annotations.enums.SecuritySchemeType;
+import io.swagger.v3.oas.annotations.info.Info;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
+import io.swagger.v3.oas.annotations.security.SecurityScheme;
+
 @ApplicationPath("/api/v1")
+@OpenAPIDefinition(
+        info = @Info(
+                title = "DarCom API",
+                version = "1.0.0",
+                description = "Co-Hosting Platform MVP — 30 endpoints"
+        ),
+        security = @SecurityRequirement(name = "bearer")
+)
+@SecurityScheme(
+        name = "bearer",
+        type = SecuritySchemeType.HTTP,
+        scheme = "bearer",
+        bearerFormat = "JWT"
+)
 public class RestApplication extends ResourceConfig {
 
     public RestApplication() {
@@ -28,5 +48,6 @@ public class RestApplication extends ResourceConfig {
         register(AdminUserResource.class);
         register(UserResource.class);
         register(HealthResource.class);
+        register(io.swagger.v3.jaxrs2.integration.resources.OpenApiResource.class);
     }
 }

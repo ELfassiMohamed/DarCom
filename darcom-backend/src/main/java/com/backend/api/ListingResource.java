@@ -34,7 +34,12 @@ import java.util.UUID;
 import static com.backend.api.ResourceSupport.currentUser;
 import static com.backend.api.ResourceSupport.normalizePageable;
 
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.tags.Tag;
+
 @Path("/listings")
+@Tag(name = "Listings", description = "Browse, publish and manage stay listings")
 public class ListingResource {
 
     private final ListingService listingService = new ListingService();
@@ -44,6 +49,10 @@ public class ListingResource {
     @RolesAllowed("HOST")
     @Consumes(MediaType.APPLICATION_JSON)
     @Produces(MediaType.APPLICATION_JSON)
+    @Operation(summary = "Publish a new listing")
+    @ApiResponse(responseCode = "201", description = "Listing created")
+    @ApiResponse(responseCode = "400", description = "Validation error")
+    @ApiResponse(responseCode = "403", description = "Email not verified")
     public Response create(@Valid ListingRequest request, @Context ContainerRequestContext ctx) {
         Listing created = listingService.create(currentUser(ctx), toListing(request));
         return Response.status(Response.Status.CREATED).entity(ListingResponse.from(created)).build();
@@ -53,6 +62,8 @@ public class ListingResource {
     @GET
     @PermitAll
     @Produces(MediaType.APPLICATION_JSON)
+    @Operation(summary = "Search public listings")
+    @ApiResponse(responseCode = "200", description = "Paginated summaries")
     public Response search(@QueryParam("city") String city,
                            @QueryParam("minPrice") BigDecimal minPrice,
                            @QueryParam("maxPrice") BigDecimal maxPrice,
@@ -70,6 +81,8 @@ public class ListingResource {
     @Path("/mine")
     @RolesAllowed("HOST")
     @Produces(MediaType.APPLICATION_JSON)
+    @Operation(summary = "List the caller's own listings, any status")
+    @ApiResponse(responseCode = "200", description = "Paginated summaries")
     public Response findMine(@Context ContainerRequestContext ctx,
                              @QueryParam("page") @DefaultValue("0") int page,
                              @QueryParam("size") @DefaultValue("20") int size) {
@@ -83,6 +96,9 @@ public class ListingResource {
     @Path("/{id}")
     @PermitAll
     @Produces(MediaType.APPLICATION_JSON)
+    @Operation(summary = "Get one listing with photos and host summary")
+    @ApiResponse(responseCode = "200", description = "Full listing")
+    @ApiResponse(responseCode = "404", description = "Listing not found")
     public Response getById(@PathParam("id") UUID id) {
         return Response.ok(ListingResponse.from(listingService.getById(id))).build();
     }
@@ -93,6 +109,11 @@ public class ListingResource {
     @RolesAllowed("HOST")
     @Consumes(MediaType.APPLICATION_JSON)
     @Produces(MediaType.APPLICATION_JSON)
+    @Operation(summary = "Full-replace a listing's editable fields")
+    @ApiResponse(responseCode = "200", description = "Updated listing")
+    @ApiResponse(responseCode = "400", description = "Validation error")
+    @ApiResponse(responseCode = "403", description = "Not the owner")
+    @ApiResponse(responseCode = "404", description = "Listing not found")
     public Response update(@PathParam("id") UUID id,
                            @Valid ListingRequest request,
                            @Context ContainerRequestContext ctx) {
@@ -104,6 +125,11 @@ public class ListingResource {
     @DELETE
     @Path("/{id}")
     @RolesAllowed("HOST")
+    @Operation(summary = "Soft-delete a listing")
+    @ApiResponse(responseCode = "204", description = "Listing removed")
+    @ApiResponse(responseCode = "403", description = "Not the owner")
+    @ApiResponse(responseCode = "404", description = "Listing not found")
+    @ApiResponse(responseCode = "409", description = "Active bookings exist")
     public Response delete(@PathParam("id") UUID id, @Context ContainerRequestContext ctx) {
         listingService.delete(currentUser(ctx), id);
         return Response.noContent().build();
