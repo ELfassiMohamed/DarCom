@@ -2788,3 +2788,20 @@
    feat(remediation): spec-align base path, 401 semantics, error codes, shapes
    feat(bookings): add Booking DTOs, resources and nested create endpoint
 ================================================================================
+
+
+================================================================================
+ TASK 09 Phase 2 — Profile + health (spec §5, §11)
+================================================================================
+ New: service/UserService (updateProfile: fullName+phone only — email/password
+ excluded by design, spec §5 anti-hijack rule), dto/user/UpdateProfileRequest,
+ api/UserResource (/users/me GET+PUT, any-authenticated gate, UserResponse
+ reuse), api/HealthResource (/health @PermitAll → {"status":"UP"}).
+ Edited: RestApplication (+2 registers). No pom change. No new deps.
+ Live (:8081/api/v1): health 200 no-token; get-me 200; put-then-get round-trip
+ persisted; no-token /users/me → 401; blank fullName → 400. Email unchangeable
+ by absence (no such field exists). GET needs no DB trip (caller scalars).
+
+  Suggested commit:
+   feat(profile): add /users/me endpoints and health check
+================================================================================

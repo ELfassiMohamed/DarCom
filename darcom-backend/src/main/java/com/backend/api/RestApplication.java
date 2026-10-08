@@ -21,5 +21,7 @@ public class RestApplication extends ResourceConfig {
         register(ListingResource.class);
         register(BookingResource.class);
         register(ListingBookingResource.class);
+        register(UserResource.class);
+        register(HealthResource.class);
     }
 }

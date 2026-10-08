@@ -617,6 +617,16 @@
      Swagger; CDI/Security/Flyway deferred; 403-page + null-body edges recorded.
   ================================================================================
 
+  ================================================================================
+   TASK 09 Phase 2 — Profile + health (condensed mirror)
+  ================================================================================
+   New: UserService.updateProfile (fullName+phone only), UpdateProfileRequest,
+     UserResource (/users/me GET+PUT), HealthResource (/health → UP).
+   Verified live: health 200 public; get/put round-trip persisted; 401 no-token;
+     400 blank name. Email unchangeable by absence. No pom change.
+  ================================================================================
+
+
 
 
 
