@@ -7,7 +7,7 @@ import org.glassfish.jersey.server.filter.RolesAllowedDynamicFeature;
 
 import jakarta.ws.rs.ApplicationPath;
 
-@ApplicationPath("/api")
+@ApplicationPath("/api/v1")
 public class RestApplication extends ResourceConfig {
 
     public RestApplication() {
@@ -19,5 +19,7 @@ public class RestApplication extends ResourceConfig {
         register(JacksonConfig.class);
         register(AuthResource.class);
         register(ListingResource.class);
+        register(BookingResource.class);
+        register(ListingBookingResource.class);
     }
 }

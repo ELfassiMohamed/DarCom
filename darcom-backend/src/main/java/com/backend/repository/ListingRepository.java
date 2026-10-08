@@ -7,6 +7,7 @@ import jakarta.persistence.EntityManager;
 import jakarta.persistence.criteria.CriteriaBuilder;
 import jakarta.persistence.criteria.CriteriaQuery;
 import jakarta.persistence.criteria.JoinType;
+import jakarta.persistence.criteria.Order;
 import jakarta.persistence.criteria.Predicate;
 import jakarta.persistence.criteria.Root;
 
@@ -80,16 +81,19 @@ public class ListingRepository extends GenericRepository<Listing> {
      * GET /listings — public search. Always restricted to ACTIVE; every other
      * filter is optional. Criteria API because the WHERE clause shape depends
      * on which of the four filters the caller actually passed (§3.4).
+     * sort is "field,direction" (spec §1, e.g. sort=createdAt,desc); unknown or
+     * absent values fall back to newest-first — a display preference, not worth
+     * a 400. Supported fields: createdAt, pricePerNight.
      */
     public List<Listing> search(String city, BigDecimal minPrice, BigDecimal maxPrice,
-                                 Boolean mealsIncluded, Pageable pageable) {
+                                 Boolean mealsIncluded, String sort, Pageable pageable) {
         CriteriaBuilder cb = em.getCriteriaBuilder();
         CriteriaQuery<Listing> cq = cb.createQuery(Listing.class);
         Root<Listing> root = cq.from(Listing.class);
         root.fetch("host", JoinType.INNER); // to-one fetch: pagination-safe (TASK-07 §4); collections stay out (bag-fetch hazard)
 
         cq.select(root).where(searchPredicates(cb, root, city, minPrice, maxPrice, mealsIncluded));
-        cq.orderBy(cb.desc(root.get("createdAt")));
+        cq.orderBy(resolveSort(cb, root, sort));
 
         return em.createQuery(cq)
                 .setFirstResult(pageable.offset())
@@ -106,8 +110,25 @@ public class ListingRepository extends GenericRepository<Listing> {
         return em.createQuery(cq).getSingleResult();
     }
 
+    /** "field,direction" sort resolver with newest-first fallback (see search javadoc). */
+    private Order resolveSort(CriteriaBuilder cb, Root<Listing> root, String sort) {
+        if (sort != null) {
+            String[] parts = sort.split(",");
+            if (parts.length == 2) {
+                boolean asc = parts[1].equalsIgnoreCase("asc");
+                if (parts[0].equals("pricePerNight")) {
+                    return asc ? cb.asc(root.get("pricePerNight")) : cb.desc(root.get("pricePerNight"));
+                }
+                if (parts[0].equals("createdAt")) {
+                    return asc ? cb.asc(root.get("createdAt")) : cb.desc(root.get("createdAt"));
+                }
+            }
+        }
+        return cb.desc(root.get("createdAt"));
+    }
+
     private Predicate[] searchPredicates(CriteriaBuilder cb, Root<Listing> root, String city,
-                                          BigDecimal minPrice, BigDecimal maxPrice, Boolean mealsIncluded) {
+                                           BigDecimal minPrice, BigDecimal maxPrice, Boolean mealsIncluded) {
         List<Predicate> predicates = new ArrayList<>();
         predicates.add(cb.equal(root.get("status"), ListingStatus.ACTIVE));
 

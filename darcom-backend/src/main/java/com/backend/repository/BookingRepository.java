@@ -18,10 +18,10 @@ public class BookingRepository extends GenericRepository<Booking> {
         super(em, Booking.class);
     }
 
-    /** GET /bookings/mine — listing fetch-joined (to-one: pagination-safe) so its title/price stay readable after the transaction closes. */
+    /** GET /bookings/mine — listing + visitor fetch-joined (both to-one: pagination-safe) so nested summaries stay readable after the transaction closes. */
     public List<Booking> findByVisitor(User visitor, Pageable pageable) {
         return em.createQuery(
-                "SELECT b FROM Booking b JOIN FETCH b.listing WHERE b.visitor = :visitor ORDER BY b.createdAt DESC",
+                "SELECT b FROM Booking b JOIN FETCH b.listing JOIN FETCH b.visitor WHERE b.visitor = :visitor ORDER BY b.createdAt DESC",
                 Booking.class)
                 .setParameter("visitor", visitor)
                 .setFirstResult(pageable.offset())

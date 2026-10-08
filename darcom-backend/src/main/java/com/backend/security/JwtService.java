@@ -15,7 +15,8 @@ import java.util.UUID;
 
 public final class JwtService {
 
-    private static final Duration ACCESS_TOKEN_TTL = Duration.ofMinutes(15);
+    /** Exposed so responses can state the TTL (spec `expiresIn`) without a second literal. */
+    public static final Duration ACCESS_TOKEN_TTL = Duration.ofMinutes(15);
     private static final SecretKey KEY = loadKey();
 
     private JwtService() {

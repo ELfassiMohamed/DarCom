@@ -38,12 +38,12 @@ public class ListingService {
         });
     }
 
-    /** GET /listings — public search, ACTIVE only, every filter optional */
+    /** GET /listings — public search, ACTIVE only, every filter optional. sort is passed through untouched (parsed in the repository). */
     public PagedResult<Listing> search(String city, BigDecimal minPrice, BigDecimal maxPrice,
-                                        Boolean mealsIncluded, Pageable pageable) {
+                                        Boolean mealsIncluded, String sort, Pageable pageable) {
         return TransactionRunner.call(em -> {
             ListingRepository repo = new ListingRepository(em);
-            List<Listing> items = repo.search(city, minPrice, maxPrice, mealsIncluded, pageable);
+            List<Listing> items = repo.search(city, minPrice, maxPrice, mealsIncluded, sort, pageable);
             long totalItems = repo.countSearch(city, minPrice, maxPrice, mealsIncluded);
             initializeListItems(items);
             return new PagedResult<>(items, totalItems);

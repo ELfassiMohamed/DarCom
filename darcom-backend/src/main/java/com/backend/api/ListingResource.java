@@ -6,10 +6,12 @@ import com.backend.domain.User;
 import com.backend.dto.PagedResponse;
 import com.backend.dto.listing.ListingRequest;
 import com.backend.dto.listing.ListingResponse;
+import com.backend.dto.listing.ListingSummaryResponse;
 import com.backend.repository.Pageable;
 import com.backend.service.ListingService;
 import com.backend.service.PagedResult;
 
+import jakarta.annotation.security.PermitAll;
 import jakarta.annotation.security.RolesAllowed;
 import jakarta.validation.Valid;
 import jakarta.ws.rs.Consumes;
@@ -50,21 +52,23 @@ public class ListingResource {
         return Response.status(Response.Status.CREATED).entity(ListingResponse.from(created)).build();
     }
 
-    /** GET /listings — public search, ACTIVE only (enforced in the repository, Task 03). Every filter optional. */
+    /** GET /listings — public search, ACTIVE only (enforced in the repository, Task 03). Every filter optional. Items are spec §6 summaries; sort is "field,direction" (spec §1). */
     @GET
+    @PermitAll
     @Produces(MediaType.APPLICATION_JSON)
     public Response search(@QueryParam("city") String city,
                            @QueryParam("minPrice") BigDecimal minPrice,
                            @QueryParam("maxPrice") BigDecimal maxPrice,
                            @QueryParam("mealsIncluded") Boolean mealsIncluded,
+                           @QueryParam("sort") String sort,
                            @QueryParam("page") @DefaultValue("0") int page,
                            @QueryParam("size") @DefaultValue("20") int size) {
         Pageable pageable = normalizePageable(page, size);
-        PagedResult<Listing> result = listingService.search(city, minPrice, maxPrice, mealsIncluded, pageable);
-        return Response.ok(toPagedResponse(result, pageable)).build();
+        PagedResult<Listing> result = listingService.search(city, minPrice, maxPrice, mealsIncluded, sort, pageable);
+        return Response.ok(toSummaryPagedResponse(result, pageable)).build();
     }
 
-    /** GET /listings/mine — HOST only; every status (the host sees their own HIDDEN/REMOVED too). */
+    /** GET /listings/mine — HOST only; every status (the host sees their own HIDDEN/REMOVED too). Same summary shape as search (spec §1 list rule). */
     @GET
     @Path("/mine")
     @RolesAllowed("HOST")
@@ -74,12 +78,13 @@ public class ListingResource {
                              @QueryParam("size") @DefaultValue("20") int size) {
         Pageable pageable = normalizePageable(page, size);
         PagedResult<Listing> result = listingService.findMine(currentUser(ctx), pageable);
-        return Response.ok(toPagedResponse(result, pageable)).build();
+        return Response.ok(toSummaryPagedResponse(result, pageable)).build();
     }
 
     /** GET /listings/{id} — public, no status filter (Task 03's flagged ambiguity, unchanged: a REMOVED listing still reads back for anyone with the id). */
     @GET
     @Path("/{id}")
+    @PermitAll
     @Produces(MediaType.APPLICATION_JSON)
     public Response getById(@PathParam("id") UUID id) {
         return Response.ok(ListingResponse.from(listingService.getById(id))).build();
@@ -117,6 +122,11 @@ public class ListingResource {
 
     private PagedResponse<ListingResponse> toPagedResponse(PagedResult<Listing> result, Pageable pageable) {
         List<ListingResponse> items = result.items().stream().map(ListingResponse::from).toList();
+        return new PagedResponse<>(items, pageable.page(), pageable.size(), result.totalItems());
+    }
+
+    private PagedResponse<ListingSummaryResponse> toSummaryPagedResponse(PagedResult<Listing> result, Pageable pageable) {
+        List<ListingSummaryResponse> items = result.items().stream().map(ListingSummaryResponse::from).toList();
         return new PagedResponse<>(items, pageable.page(), pageable.size(), result.totalItems());
     }
 

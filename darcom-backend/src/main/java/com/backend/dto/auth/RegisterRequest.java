@@ -29,6 +29,7 @@ public class RegisterRequest {
      * isn't the only thing standing in the way (Task 04 §7's note on this).
      */
     @NotNull
+    @NotAdmin
     private UserRole role;
 
     public RegisterRequest() {

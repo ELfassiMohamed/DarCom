@@ -591,6 +591,33 @@
      documented in code.
   ================================================================================
 
+  ================================================================================
+   TASK 09 — Phase 0 remediation + Phase 1 booking HTTP (condensed mirror)
+  ================================================================================
+   WHY: spec read end to end; contradicted rotation, search shape, role gates,
+     4 error codes, base path. Fixed while surface smallest (16 endpoints).
+
+   PHASE 0: /api/v1 (1 line); missing-token → 401 UNAUTHENTICATED via @PermitAll
+     (public methods annotated; bad-token still INVALID_TOKEN); renames:
+     INVALID_OR_EXPIRED_REFRESH_TOKEN, NOT_PARTICIPANT, NOT_LISTING_OWNER,
+     CANNOT_CANCEL; RegisterResponse trimmed; AuthResponse+expiresIn:900;
+     refresh → {accessToken, expiresIn}, rotation deleted (ruled);
+     ListingSummaryResponse + sort=field,direction; booking create +verified
+     check; BookingResponse +totalPrice/+rejectionReason (new nullable column);
+     booking roles narrowed per §7. NotAdmin (ADMIN→400) + DTO AssertTrue range
+     (→400); service 409/403s stay as backstops.
+   PHASE 1: dto/booking ×5, BookingResource (/bookings), ListingBookingResource
+     (nested POST, VISITOR), repo +visitor fetch. All live: 201+totalPrice,
+     mine/received/counts, reject+reason stored, auto-reject over HTTP,
+     DATES_UNAVAILABLE, narrowing/machine 409s, cancel 200, CANNOT_CANCEL,
+     delete-guard 409 then guard-clear 204, DTO-400s, no-token 401. ~35 green.
+   GOVERNANCE: on-disk TASK-09.md contradicted the rulings on 4 items —
+     realigned to rulings; no open authority question on built work.
+   OPEN: email/photos (gated), profile/health, messaging, reports/admin,
+     Swagger; CDI/Security/Flyway deferred; 403-page + null-body edges recorded.
+  ================================================================================
+
+
 
 
 

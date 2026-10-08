@@ -62,27 +62,24 @@ public class AuthService {
         });
     }
 
-    /** POST /auth/refresh — rotates: the presented token is deleted, a new one issued */
-    public AuthResult refresh(String rawRefreshToken) {
+    /** POST /auth/refresh — spec-literal, NO rotation: the presented token stays valid, only a fresh access token is returned. */
+    public RefreshResult refresh(String rawRefreshToken) {
         return TransactionRunner.call(em -> {
             RefreshTokenRepository refreshTokenRepository = new RefreshTokenRepository(em);
             String hash = RefreshTokenHasher.hash(rawRefreshToken);
 
             RefreshToken existing = refreshTokenRepository.findByTokenHash(hash)
-                    .orElseThrow(() -> new UnauthorizedException("INVALID_REFRESH_TOKEN", "Refresh token not recognized"));
+                    .orElseThrow(() -> new UnauthorizedException("INVALID_OR_EXPIRED_REFRESH_TOKEN", "Refresh token not recognized"));
 
             if (existing.isExpired()) {
                 refreshTokenRepository.delete(existing);
-                throw new UnauthorizedException("INVALID_REFRESH_TOKEN", "Refresh token has expired");
+                throw new UnauthorizedException("INVALID_OR_EXPIRED_REFRESH_TOKEN", "Refresh token has expired");
             }
 
             User user = existing.getUser();
-            refreshTokenRepository.delete(existing);
-
             String accessToken = JwtService.issueAccessToken(user);
-            String newRefreshToken = issueRefreshToken(em, user);
 
-            return new AuthResult(accessToken, newRefreshToken, user);
+            return new RefreshResult(accessToken, JwtService.ACCESS_TOKEN_TTL.getSeconds());
         });
     }
 

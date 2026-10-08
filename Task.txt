@@ -2707,3 +2707,84 @@
    also enforces checkOut > checkIn up front (INVALID_DATE_RANGE) — the
    class-level rule Bean Validation can't express, per Booking's TODO.
 ================================================================================
+
+
+================================================================================
+ TASK 09 — Phase 0 remediation + Phase 1 booking HTTP (spec read, executed)
+ DarCom Co-Hosting Platform (darcom-backend)
+ Stack: unchanged (Jersey 3.1.1, HV 8.0.5, JJWT 0.13.0) — zero new dependencies
+================================================================================
+
+ CONTEXT: API-Specification.md (884 lines, repo root) read end to end for the
+ first time. It contradicted several task-file assumptions; Phase 0 fixes them
+ while the surface is smallest (16 endpoints), Phase 1 ships booking HTTP.
+
+ DECISIONS RULED (not decreed): spec-compliant refresh (rotation removed);
+ DTO-layer 400s with service backstops (NotAdmin, AssertTrue range);
+ nullable rejectionReason column added. On-disk TASK-09.md carried opposite
+ resolutions on 4 items — realigned to the rulings (see its §0 table).
+
+ --------------------------------------------------------------------------------
+  PHASE 0 — REMEDIATION (all verified live)
+ --------------------------------------------------------------------------------
+
+ 1. Base path /api → /api/v1 (RestApplication, 1 line). All routes moved.
+ 2. Missing token → 401 UNAUTHENTICATED (new code, existing type). Filter reads
+    @PermitAll via ResourceInfo; public methods annotated (register/login/
+    refresh, search, getById). Present-but-bad still 401 INVALID_TOKEN.
+    No-token gated POST: was 403, now 401 envelope. Public paths unaffected.
+ 3. Error-code renames (existing types, new literals): INVALID_REFRESH_TOKEN ×2
+    → INVALID_OR_EXPIRED_REFRESH_TOKEN; NOT_AUTHORIZED → NOT_PARTICIPANT;
+    NOT_LISTING_HOST → NOT_LISTING_OWNER; cancel-machine INVALID_STATUS_
+    TRANSITION → CANNOT_CANCEL (updateStatus keeps its literal — spec agrees).
+ 4. Shapes: RegisterResponse (spec-exact, no phone/blocked); AuthResponse +
+    expiresIn:900 (public JwtService.ACCESS_TOKEN_TTL, no second literal);
+    refresh → {accessToken, expiresIn} only, token reused (rotation deleted);
+    ListingSummaryResponse (spec §6: id/title/city/price/currency/mainPhotoUrl/
+    hostName, null photo until storage) for search+mine; sort=field,direction
+    threaded repo→service (createdAt/pricePerNight × asc/desc, lenient default);
+    booking create +EMAIL_NOT_VERIFIED (spec table); BookingResponse +totalPrice
+    (nights×price, stored nowhere) +rejectionReason; booking roles narrowed
+    per §7 (create/mine/cancel VISITOR, received/status HOST, get broad).
+ 5. Booking entity +rejectionReason TEXT column (set on REJECTED only).
+
+ Files: edited AuthService/AuthResource/AuthenticationFilter/RestApplication/
+ JwtService(const visibility)/RegisterRequest(@NotAdmin)/AuthResponse/
+ BookingService(codes+verified+reason param)/Booking/ListingRepository(sort)/
+ ListingService(thread sort)/ListingResource(summary+sort+PermitAll).
+ New: RefreshResult, RegisterResponse, NotAdmin(+Validator), listing
+ ListingSummaryResponse, booking 5 DTOs, BookingResource,
+ ListingBookingResource. BookingRepository +JOIN FETCH visitor.
+
+ --------------------------------------------------------------------------------
+  PHASE 1 — BOOKING HTTP (all verified live, /api/v1)
+ --------------------------------------------------------------------------------
+
+ - POST /listings/{id}/bookings → 201 PENDING + nested scalar summaries +
+   totalPrice (3n×500=1500.00 observed); unverified visitor → 403 envelope.
+ - GET /bookings/mine, /received (+?status filter, counts exact).
+ - GET /bookings/{id} as visitor/host; REJECT with reason → stored + returned.
+ - Overlapping PENDING → 201; confirm → other REJECTED (auto-reject over HTTP);
+   third overlap → 409; host-CANCELLED target → 409; cancel → 200; cancel
+   terminal → 409 CANNOT_CANCEL; DELETE listing → 409 GUARD (first HTTP proof),
+   then cancel-all → 204 (guard precision).
+ - Inverted dates → 400 DTO (service 409 unreachable by design); missing
+   checkIn → 400; no-token booking POST → 401.
+ - Full matrix: ~35 live assertions, zero failures. Compile green; §8/§9-style
+   greps clean (javax 0, thin resources, contact-field-free DTOs).
+
+ --------------------------------------------------------------------------------
+  DEFERRED / FLAGS (unchanged or new)
+ --------------------------------------------------------------------------------
+ - Email (4 endpoints + register side effect), photos (2), profile/health,
+   messaging, reports/admin, Swagger: per TASK-09.md phases. Verified gates
+   stay enforced; psql-flip scaffolding documented.
+ - CDI/Security migration, Flyway, 403-envelope page, null-body 500s: recorded
+   deviations, post-MVP or pattern-decision items.
+ - Governance conflict (file vs rulings) RESOLVED by alignment above; no open
+   authority question remains on built work.
+
+  Suggested commits (land separately, Phase 0 first):
+   feat(remediation): spec-align base path, 401 semantics, error codes, shapes
+   feat(bookings): add Booking DTOs, resources and nested create endpoint
+================================================================================

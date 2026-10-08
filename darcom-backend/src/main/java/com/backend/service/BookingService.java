@@ -37,6 +37,11 @@ public class BookingService {
         if (checkIn == null || checkOut == null || !checkOut.isAfter(checkIn)) {
             throw new ConflictException("INVALID_DATE_RANGE", "checkOut must be after checkIn");
         }
+        // Spec §7 requires a verified caller for booking (403 EMAIL_NOT_VERIFIED),
+        // same rule ListingService.create enforces for publishing — mirrors it here.
+        if (!visitor.isVerified()) {
+            throw new ForbiddenException("EMAIL_NOT_VERIFIED", "Verify your email before booking a stay");
+        }
 
         return TransactionRunner.call(em -> {
             Listing listing = new ListingRepository(em).findById(listingId)
@@ -90,7 +95,7 @@ public class BookingService {
             boolean isAdmin = currentUser.getRole() == UserRole.ADMIN;
 
             if (!isVisitor && !isHost && !isAdmin) {
-                throw new ForbiddenException("NOT_AUTHORIZED", "You are not authorized to view this booking");
+                throw new ForbiddenException("NOT_PARTICIPANT", "You are not authorized to view this booking");
             }
             return booking;
         });
@@ -122,15 +127,18 @@ public class BookingService {
      * every other PENDING booking on the same listing whose dates overlap
      * this one gets auto-rejected — the workflow Task 03 explicitly
      * deferred, finally built on top of Task 02's findOverlapping.
+     *
+     * reason accompanies REJECTED (spec §7) and is stored on the booking;
+     * ignored for CONFIRMED.
      */
-    public Booking updateStatus(User host, UUID bookingId, BookingStatus newStatus) {
+    public Booking updateStatus(User host, UUID bookingId, BookingStatus newStatus, String reason) {
         return TransactionRunner.call(em -> {
             BookingRepository bookingRepository = new BookingRepository(em);
             Booking booking = bookingRepository.findByIdWithDetails(bookingId)
                     .orElseThrow(() -> new NotFoundException("BOOKING_NOT_FOUND", "Booking not found"));
 
             if (!booking.getListing().getHost().getId().equals(host.getId())) {
-                throw new ForbiddenException("NOT_LISTING_HOST", "Only the listing's host can update a booking's status");
+                throw new ForbiddenException("NOT_LISTING_OWNER", "Only the listing's host can update a booking's status");
             }
             if (newStatus != BookingStatus.CONFIRMED && newStatus != BookingStatus.REJECTED) {
                 throw new ConflictException("INVALID_STATUS_TRANSITION",
@@ -142,6 +150,9 @@ public class BookingService {
             }
 
             booking.setStatus(newStatus);
+            if (newStatus == BookingStatus.REJECTED) {
+                booking.setRejectionReason(reason);
+            }
             bookingRepository.update(booking);
 
             if (newStatus == BookingStatus.CONFIRMED) {
@@ -169,7 +180,7 @@ public class BookingService {
                 throw new ForbiddenException("NOT_BOOKING_OWNER", "You can only cancel your own bookings");
             }
             if (!booking.getStatus().canTransitionTo(BookingStatus.CANCELLED)) {
-                throw new ConflictException("INVALID_STATUS_TRANSITION",
+                throw new ConflictException("CANNOT_CANCEL",
                         "Cannot cancel a booking that is " + booking.getStatus());
             }
 
