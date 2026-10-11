@@ -36,18 +36,24 @@ public class UserRepository extends GenericRepository<User> {
 
     /** GET /admin/users — role, verified, blocked, search are all optional. */
     public List<User> search(UserRole role, Boolean verified, Boolean blocked, String searchText,
-                              Pageable pageable) {
+                              Pageable pageable, String sortField, boolean asc) {
         CriteriaBuilder cb = em.getCriteriaBuilder();
         CriteriaQuery<User> cq = cb.createQuery(User.class);
         Root<User> root = cq.from(User.class);
 
         cq.select(root).where(searchPredicates(cb, root, role, verified, blocked, searchText));
-        cq.orderBy(cb.desc(root.get("createdAt")));
+        cq.orderBy(asc ? cb.asc(root.get(sortField)) : cb.desc(root.get(sortField)));
 
         return em.createQuery(cq)
                 .setFirstResult(pageable.offset())
                 .setMaxResults(pageable.size())
                 .getResultList();
+    }
+
+    /** Backwards-compatible default sort: {@code createdAt,desc}. */
+    public List<User> search(UserRole role, Boolean verified, Boolean blocked, String searchText,
+                              Pageable pageable) {
+        return search(role, verified, blocked, searchText, pageable, "createdAt", false);
     }
 
     /** Same filters as search() — for the paginated envelope's totalItems. */
@@ -68,12 +74,17 @@ public class UserRepository extends GenericRepository<User> {
         if (verified != null) predicates.add(cb.equal(root.get("verified"), verified));
         if (blocked != null) predicates.add(cb.equal(root.get("blocked"), blocked));
         if (searchText != null && !searchText.isBlank()) {
-            String pattern = "%" + searchText.toLowerCase() + "%";
+            String pattern = "%" + escapeLike(searchText.toLowerCase()) + "%";
             predicates.add(cb.or(
-                    cb.like(cb.lower(root.get("fullName")), pattern),
-                    cb.like(cb.lower(root.get("email")), pattern)
+                    cb.like(cb.lower(root.get("fullName")), pattern, '\\'),
+                    cb.like(cb.lower(root.get("email")), pattern, '\\')
             ));
         }
         return predicates.toArray(new Predicate[0]);
+    }
+
+    /** Escapes {@code %}, {@code _} and backslash so user input is literal in LIKE (used with ESCAPE '\'). */
+    static String escapeLike(String term) {
+        return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
     }
 }
