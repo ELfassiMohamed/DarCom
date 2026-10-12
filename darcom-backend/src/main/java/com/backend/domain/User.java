@@ -7,6 +7,7 @@ import jakarta.validation.constraints.NotNull;
 import com.backend.domain.enums.UserRole;
 
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.UUID;
 
 @Entity
@@ -53,7 +54,7 @@ public class User {
 
     @PrePersist
     void onCreate() {
-        if (createdAt == null) createdAt = Instant.now();
+        if (createdAt == null) createdAt = Instant.now().truncatedTo(ChronoUnit.SECONDS);
     }
 
     public UUID getId() { return id; }
