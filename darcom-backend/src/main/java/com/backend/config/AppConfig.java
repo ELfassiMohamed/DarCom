@@ -19,6 +19,14 @@ public class AppConfig {
     private final long jwtAccessTtlSeconds;
     private final long jwtRefreshTtlSeconds;
     private final List<String> corsAllowedOrigins;
+    private final String smtpHost;
+    private final int smtpPort;
+    private final String smtpUsername;
+    private final String smtpPassword;
+    private final String smtpFrom;
+    private final String appPublicUrl;
+    private final long verificationTokenTtlHours;
+    private final long passwordResetTokenTtlMinutes;
 
     public AppConfig() {
         Dotenv dotenv = Dotenv.configure().ignoreIfMissing().load();
@@ -39,6 +47,24 @@ public class AppConfig {
                 .map(String::trim)
                 .filter(s -> !s.isEmpty())
                 .toList();
+        this.smtpHost = orDefault(firstNonBlank(System.getenv("SMTP_HOST"), dotenv.get("SMTP_HOST")),
+                "smtp.gmail.com");
+        this.smtpPort = (int) parseLong(firstNonBlank(System.getenv("SMTP_PORT"), dotenv.get("SMTP_PORT")), 465);
+        this.smtpUsername = firstNonBlank(System.getenv("SMTP_USERNAME"), dotenv.get("SMTP_USERNAME"));
+        this.smtpPassword = firstNonBlank(System.getenv("SMTP_PASSWORD"), dotenv.get("SMTP_PASSWORD"));
+        String from = firstNonBlank(System.getenv("SMTP_FROM"), dotenv.get("SMTP_FROM"));
+        this.smtpFrom = from != null ? from : smtpUsername;
+        this.appPublicUrl = orDefault(
+                firstNonBlank(System.getenv("APP_PUBLIC_URL"), dotenv.get("APP_PUBLIC_URL")),
+                "http://localhost:3000");
+        this.verificationTokenTtlHours = parseLong(
+                firstNonBlank(System.getenv("VERIFICATION_TOKEN_TTL_HOURS"),
+                        dotenv.get("VERIFICATION_TOKEN_TTL_HOURS")),
+                24);
+        this.passwordResetTokenTtlMinutes = parseLong(
+                firstNonBlank(System.getenv("PASSWORD_RESET_TOKEN_TTL_MINUTES"),
+                        dotenv.get("PASSWORD_RESET_TOKEN_TTL_MINUTES")),
+                60);
     }
 
     public String getJwtSecret() {
@@ -59,6 +85,38 @@ public class AppConfig {
 
     public List<String> getCorsAllowedOrigins() {
         return corsAllowedOrigins;
+    }
+
+    public String getSmtpHost() {
+        return smtpHost;
+    }
+
+    public int getSmtpPort() {
+        return smtpPort;
+    }
+
+    public String getSmtpUsername() {
+        return smtpUsername;
+    }
+
+    public String getSmtpPassword() {
+        return smtpPassword;
+    }
+
+    public String getSmtpFrom() {
+        return smtpFrom;
+    }
+
+    public String getAppPublicUrl() {
+        return appPublicUrl;
+    }
+
+    public long getVerificationTokenTtlHours() {
+        return verificationTokenTtlHours;
+    }
+
+    public long getPasswordResetTokenTtlMinutes() {
+        return passwordResetTokenTtlMinutes;
     }
 
     private static String firstNonBlank(String a, String b) {

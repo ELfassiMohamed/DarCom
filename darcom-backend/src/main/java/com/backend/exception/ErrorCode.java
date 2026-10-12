@@ -23,4 +23,7 @@ public final class ErrorCode {
     public static final String ALREADY_BLOCKED = "ALREADY_BLOCKED";
     public static final String NOT_BLOCKED = "NOT_BLOCKED";
     public static final String CANNOT_BLOCK_ADMIN = "CANNOT_BLOCK_ADMIN";
+    public static final String INVALID_OR_EXPIRED_VERIFICATION_TOKEN = "INVALID_OR_EXPIRED_VERIFICATION_TOKEN";
+    public static final String INVALID_OR_EXPIRED_RESET_TOKEN = "INVALID_OR_EXPIRED_RESET_TOKEN";
+    public static final String TOO_MANY_REQUESTS = "TOO_MANY_REQUESTS";
 }

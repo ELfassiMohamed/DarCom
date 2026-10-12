@@ -10,6 +10,7 @@
         <class>com.backend.domain.Message</class>
         <class>com.backend.domain.Report</class>
         <class>com.backend.domain.RefreshToken</class>
+        <class>com.backend.domain.AuthToken</class>
 
         <properties>
             <property name="jakarta.persistence.schema-generation.database.action" value="update"/>

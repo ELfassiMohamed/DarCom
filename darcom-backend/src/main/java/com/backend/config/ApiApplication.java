@@ -10,6 +10,7 @@ import com.backend.security.JwtService;
 import com.backend.security.PasswordService;
 import com.backend.service.AdminUserService;
 import com.backend.service.AuthService;
+import com.backend.service.MailService;
 import com.backend.service.UserService;
 
 /**
@@ -33,6 +34,7 @@ public class ApiApplication extends ResourceConfig {
                 bind(AuthService.class).to(AuthService.class).in(Singleton.class);
                 bind(UserService.class).to(UserService.class).in(Singleton.class);
                 bind(AdminUserService.class).to(AdminUserService.class).in(Singleton.class);
+                bind(MailService.class).to(MailService.class).in(Singleton.class);
             }
         });
     }
