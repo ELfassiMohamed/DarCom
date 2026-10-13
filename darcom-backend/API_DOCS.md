@@ -1,6 +1,6 @@
 # DarCom Backend — API Documentation
 
-Base URL: `http://localhost:8080/<context-path>/api`
+Base URL: `http://localhost:8080/darcom-backend/api`
 (`<context-path>` = deployed WAR name, e.g. `darcom-backend-0.0.1-SNAPSHOT` or `darcom` if renamed.)
 
 - All JSON is UTF-8. IDs are UUIDs. Timestamps are ISO-8601 UTC (`2026-09-19T14:30:00Z`).
