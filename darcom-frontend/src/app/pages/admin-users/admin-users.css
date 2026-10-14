@@ -1,0 +1,399 @@
+/* Admin users datatable — plain-CSS port of Users-List-Datatable.txt
+   (shadcn Card/Table/Badge look, no UI library). Real backend data only:
+   no Last-Login / Two-Step columns, the API does not provide them. */
+
+.admin-page {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  min-height: 100vh;
+  width: 100%;
+  padding: 32px 20px;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+}
+
+.card {
+  width: 100%;
+  max-width: 1120px;
+  background: #fff;
+  border-radius: 16px;
+  box-shadow: 0 25px 50px rgba(0, 0, 0, 0.2);
+  overflow: hidden;
+}
+
+.toolbar {
+  padding: 1.25rem 1.5rem;
+  border-bottom: 1px solid #e8e8ef;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.toolbar h1 {
+  font-size: 1.25rem;
+  margin: 0;
+  color: #222;
+  font-weight: 700;
+}
+
+.count {
+  font-size: 0.85rem;
+  color: #777;
+  background: #f0f1f7;
+  border-radius: 999px;
+  padding: 0.15rem 0.7rem;
+  font-weight: 600;
+}
+
+.toolbar .spacer {
+  flex: 1;
+}
+
+.search,
+.filter {
+  border: 1px solid #ddd;
+  border-radius: 10px;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.9rem;
+  font-family: inherit;
+  color: #333;
+  background: #fff;
+  outline: none;
+}
+
+.search {
+  min-width: 200px;
+}
+
+.search:focus,
+.filter:focus {
+  border-color: #667eea;
+  box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.25);
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+  min-width: 760px;
+}
+
+thead tr {
+  background: #f6f6fa;
+}
+
+th {
+  padding: 0.9rem 1rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #777;
+  text-align: left;
+  white-space: nowrap;
+}
+
+th.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+
+th.sortable:hover {
+  color: #444;
+}
+
+td {
+  padding: 0.9rem 1rem;
+  border-top: 1px solid #eee;
+  vertical-align: middle;
+}
+
+tbody tr:hover {
+  background: #fafaff;
+}
+
+.user-cell {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.avatar {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: rgba(102, 126, 234, 0.12);
+  color: #5568d3;
+  font-weight: 700;
+  font-size: 0.85rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.user-name {
+  font-weight: 600;
+  color: #222;
+}
+
+.user-email {
+  font-size: 0.82rem;
+  color: #777;
+}
+
+.muted {
+  color: #777;
+}
+
+.pill {
+  display: inline-block;
+  padding: 0.15rem 0.7rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  background: #eef0ff;
+  color: #5568d3;
+  white-space: nowrap;
+}
+
+.pill.ok {
+  background: #e6f4ea;
+  color: #1b6e3c;
+  border: 1px solid #bfe3cd;
+}
+
+.pill.bad {
+  background: #fdecea;
+  color: #b00020;
+  border: 1px solid #f5c6cb;
+}
+
+.pill.idle {
+  background: #f0f1f7;
+  color: #777;
+  border: 1px solid #e0e0e8;
+}
+
+.row-error {
+  color: #b00020;
+  font-size: 0.8rem;
+  margin-top: 0.4rem;
+}
+
+.menu {
+  position: relative;
+  display: inline-block;
+}
+
+.menu summary {
+  list-style: none;
+  cursor: pointer;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #444;
+  background: #fff;
+  white-space: nowrap;
+}
+
+.menu summary::-webkit-details-marker {
+  display: none;
+}
+
+.menu summary:hover {
+  background: #f4f4f8;
+}
+
+.menu-list {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 20;
+  min-width: 140px;
+  background: #fff;
+  border: 1px solid #e3e3ea;
+  border-radius: 10px;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.12);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+}
+
+.menu-list button {
+  border: none;
+  background: none;
+  text-align: left;
+  padding: 0.55rem 0.75rem;
+  font-size: 0.85rem;
+  font-family: inherit;
+  border-radius: 6px;
+  cursor: pointer;
+  color: #333;
+}
+
+.menu-list button:hover:not(:disabled) {
+  background: #f2f2f7;
+}
+
+.menu-list button.danger {
+  color: #b00020;
+}
+
+.menu-list button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.block-form {
+  margin-top: 0.5rem;
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.block-form input {
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.82rem;
+  font-family: inherit;
+  width: 180px;
+  outline: none;
+}
+
+.block-form input:focus {
+  border-color: #667eea;
+}
+
+.mini-btn {
+  border: 1px solid #ddd;
+  background: #fff;
+  border-radius: 8px;
+  padding: 0.4rem 0.7rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.mini-btn.primary {
+  background: #667eea;
+  border-color: #667eea;
+  color: #fff;
+}
+
+.mini-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.state {
+  padding: 2.5rem 1.5rem;
+  text-align: center;
+  color: #666;
+}
+
+.list-error {
+  margin: 1rem 1.5rem 0;
+  padding: 0.6rem 1rem;
+  color: #b00020;
+  background: #fdecea;
+  border: 1px solid #f5c6cb;
+  border-radius: 10px;
+  font-size: 0.9rem;
+}
+
+.footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+  padding: 1rem 1.5rem;
+  border-top: 1px solid #e8e8ef;
+  font-size: 0.85rem;
+  color: #666;
+}
+
+.footer .spacer {
+  flex: 1;
+}
+
+.pager {
+  display: flex;
+  gap: 0.3rem;
+  align-items: center;
+}
+
+.pager button {
+  border: 1px solid #ddd;
+  background: #fff;
+  border-radius: 8px;
+  min-width: 32px;
+  height: 32px;
+  padding: 0 0.5rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  color: #444;
+}
+
+.pager button.current {
+  background: #667eea;
+  border-color: #667eea;
+  color: #fff;
+}
+
+.pager button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.back {
+  display: inline-block;
+  margin: 0 0 12px;
+  color: #fff;
+  font-size: 0.9rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.back:hover {
+  text-decoration: underline;
+}
+
+.wrap {
+  width: 100%;
+  max-width: 1120px;
+  display: flex;
+  flex-direction: column;
+}
+
+input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+  accent-color: #667eea;
+  cursor: pointer;
+}
+
+@media (max-width: 640px) {
+  .admin-page {
+    padding: 16px 10px;
+  }
+  .toolbar {
+    padding: 1rem;
+  }
+  .search {
+    min-width: 0;
+    flex: 1;
+  }
+}

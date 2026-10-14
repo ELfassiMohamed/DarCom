@@ -15,8 +15,38 @@
 - Angular only calls relative `/api` URLs (no absolute backend URL in code).
 
 ## Dev workflow notes (Phase 4)
+- Route `/admin/users` (lazy, `authGuard + adminGuard`; non-admin → `/home`, logged-out → `/login`).
+- `AdminService.list` maps to `GET /api/admin/users` (`page` 0-based, `size=10`,
+  `sort=field,dir` with fields `createdAt|email|fullName|role`, optional `role|verified|blocked|search`).
+  Block → `PATCH /api/admin/users/{id}/block {reason}` (reason required, max 500);
+  unblock → `PATCH .../unblock`.
+- UI is a plain-CSS port of `Users-List-Datatable.txt` (no shadcn/radix/Tailwind deps added):
+  card + toolbar (search w/ 400ms debounce, role/verified/status filters),
+  checkbox selection + select-all, sortable User/Role/Joined headers,
+  avatar initials, role/verified/status pills, actions menu (Block with inline
+  reason form / Unblock), pagination ("Showing X–Y of Z").
+- Mock-only columns from the txt (`Last Login`, `Two-Step`, Edit/View/Delete,
+  Unsplash avatars) were dropped: the API provides no such fields; actions map
+  to the real block/unblock endpoints. `ADMIN` rows cannot be blocked (backend 409).
+- Home shows a "Manage users" link when `user.role === 'ADMIN'`.
 - `npm start` = `ng serve --port 3000 --proxy-config proxy.conf.json`
 - `npm start` and the nginx container both use host port 3000 → cannot run at the same time. Stop one before starting the other (`docker compose down` or stop `ng serve`).
+
+## Admin users page (added on request, was out of scope in plan.md)
+- Route `/admin/users` (lazy, `authGuard + adminGuard`; non-admin → `/home`, logged-out → `/login`).
+- `AdminService.list` maps to `GET /api/admin/users` (`page` 0-based, `size=10`,
+  `sort=field,dir` with fields `createdAt|email|fullName|role`, optional `role|verified|blocked|search`).
+  Block → `PATCH /api/admin/users/{id}/block {reason}` (reason required, max 500);
+  unblock → `PATCH .../unblock`.
+- UI is a plain-CSS port of `Users-List-Datatable.txt` (no shadcn/radix/Tailwind deps added):
+  card + toolbar (search w/ 400ms debounce, role/verified/status filters),
+  checkbox selection + select-all, sortable User/Role/Joined headers,
+  avatar initials, role/verified/status pills, actions menu (Block with inline
+  reason form / Unblock), pagination ("Showing X–Y of Z").
+- Mock-only columns from the txt (`Last Login`, `Two-Step`, Edit/View/Delete,
+  Unsplash avatars) were dropped: the API provides no such fields; actions map
+  to the real block/unblock endpoints. `ADMIN` rows cannot be blocked (backend 409).
+- Home shows a "Manage users" link when `user.role === 'ADMIN'`.
 
 ## Troubleshooting (Phase 7)
 See plan.md Phase 7 table — copied here for convenience:

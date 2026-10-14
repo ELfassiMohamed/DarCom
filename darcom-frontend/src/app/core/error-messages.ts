@@ -35,6 +35,14 @@ export function toUserMessage(err: unknown): string {
           return 'This verification link is invalid or has expired.';
         case 'VALIDATION_ERROR':
           return body.message;
+        case 'CANNOT_BLOCK_ADMIN':
+          return 'Admin accounts cannot be blocked.';
+        case 'ALREADY_BLOCKED':
+          return 'This user is already blocked.';
+        case 'NOT_BLOCKED':
+          return 'This user is not blocked.';
+        case 'USER_NOT_FOUND':
+          return 'User not found.';
         default:
           return body.message;
       }

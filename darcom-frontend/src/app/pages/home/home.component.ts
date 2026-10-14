@@ -1,5 +1,5 @@
 import { Component, OnInit, inject, signal } from '@angular/core';
-import { Router } from '@angular/router';
+import { Router, RouterLink } from '@angular/router';
 import { AuthService } from '../../core/auth.service';
 import { toUserMessage } from '../../core/error-messages';
 import { User } from '../../core/models';
@@ -7,6 +7,7 @@ import { User } from '../../core/models';
 @Component({
   selector: 'app-home',
   standalone: true,
+  imports: [RouterLink],
   template: `
     <div class="auth">
       <div class="container single">
@@ -42,6 +43,9 @@ import { User } from '../../core/models';
           </dl>
         }
         <button type="button" class="btn" (click)="onLogout()" [disabled]="loggingOut()">Logout</button>
+        @if (user()?.role === 'ADMIN') {
+          <p class="alt"><a routerLink="/admin/users">Manage users</a></p>
+        }
       </div>
     </div>
   `,

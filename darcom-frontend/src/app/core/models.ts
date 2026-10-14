@@ -60,3 +60,36 @@ export interface ApiError {
   message: string;
   path: string;
 }
+
+export interface AdminUserSummary {
+  id: string;
+  email: string;
+  fullName: string;
+  role: Role;
+  verified: boolean;
+  blocked: boolean;
+  createdAt: string;
+}
+
+export interface PageResponse<T> {
+  items: T[];
+  page: number;
+  size: number;
+  totalItems: number;
+  totalPages: number;
+}
+
+export type AdminSortField = 'createdAt' | 'email' | 'fullName' | 'role';
+
+export type SortDir = 'asc' | 'desc';
+
+export interface AdminUserQuery {
+  page: number;
+  size: number;
+  sortField: AdminSortField;
+  sortDir: SortDir;
+  search?: string;
+  role?: Role;
+  verified?: boolean;
+  blocked?: boolean;
+}
