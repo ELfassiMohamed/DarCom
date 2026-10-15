@@ -48,6 +48,22 @@
   to the real block/unblock endpoints. `ADMIN` rows cannot be blocked (backend 409).
 - Home shows a "Manage users" link when `user.role === 'ADMIN'`.
 
+## Admin dropdown nav (from `Dorpdown Navigation.txt`)
+- Shared standalone `AdminNavComponent` (`src/app/shared/admin-nav/`), used by admin
+  pages only (currently just `/admin/users`). Plain-CSS port, no new dependencies
+  (no framer-motion/lucide).
+- Keeps the spec's behavior: pill hover on top buttons, rotating chevron,
+  hover + click mega-menu card with grouped links and icon tiles, Escape /
+  outside-click closes, hamburger menu under 760px, active-link highlight.
+- Mock marketing items (Products/Solutions/Resources, `href="#"`) dropped: every item
+  is a real route — `Users` menu → All users / Blocked (`?blocked=true`) /
+  Unverified (`?verified=false`) presets, direct `Home` link, brand → `/admin/users`.
+- Logout button (calls `AuthService.logout`, always navigates to `/login`) plus the
+  logged-in admin email. The old "Back to home" link was removed (nav covers it).
+- `AdminUsersComponent` applies `role|verified|blocked|search` query params as filter
+  presets (subscribed, so switching presets reloads without remount); filter selects
+  are value-bound to stay in sync.
+
 ## Troubleshooting (Phase 7)
 See plan.md Phase 7 table — copied here for convenience:
 | Symptom | Likely cause / fix |

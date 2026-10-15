@@ -1,22 +1,23 @@
 import { Component, DestroyRef, OnInit, computed, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { FormControl, ReactiveFormsModule, Validators } from '@angular/forms';
-import { RouterLink } from '@angular/router';
+import { ActivatedRoute, ParamMap } from '@angular/router';
 import { debounceTime, distinctUntilChanged } from 'rxjs';
 import { AdminService } from '../../core/admin.service';
 import { toUserMessage } from '../../core/error-messages';
 import { AdminSortField, AdminUserSummary, Role } from '../../core/models';
+import { AdminNavComponent } from '../../shared/admin-nav/admin-nav.component';
 
 const PAGE_SIZE = 10;
 
 @Component({
   selector: 'app-admin-users',
   standalone: true,
-  imports: [ReactiveFormsModule, RouterLink],
+  imports: [ReactiveFormsModule, AdminNavComponent],
   template: `
+    <app-admin-nav />
     <div class="admin-page">
       <div class="wrap">
-        <a class="back" routerLink="/home">&larr; Back to home</a>
         <div class="card">
           <div class="toolbar">
             <h1>Users</h1>
@@ -32,7 +33,12 @@ const PAGE_SIZE = 10;
               [formControl]="searchControl"
               aria-label="Search users"
             />
-            <select class="filter" (change)="onRoleChange($event)" aria-label="Filter by role">
+            <select
+              class="filter"
+              [value]="roleFilter()"
+              (change)="onRoleChange($event)"
+              aria-label="Filter by role"
+            >
               <option value="">All roles</option>
               <option value="VISITOR">VISITOR</option>
               <option value="HOST">HOST</option>
@@ -40,6 +46,7 @@ const PAGE_SIZE = 10;
             </select>
             <select
               class="filter"
+              [value]="verifiedFilter()"
               (change)="onFlagChange($event, 'verified')"
               aria-label="Filter by verified"
             >
@@ -49,6 +56,7 @@ const PAGE_SIZE = 10;
             </select>
             <select
               class="filter"
+              [value]="blockedFilter()"
               (change)="onFlagChange($event, 'blocked')"
               aria-label="Filter by blocked"
             >
@@ -224,6 +232,7 @@ const PAGE_SIZE = 10;
 })
 export class AdminUsersComponent implements OnInit {
   private readonly admin = inject(AdminService);
+  private readonly route = inject(ActivatedRoute);
   private readonly destroyRef = inject(DestroyRef);
 
   readonly users = signal<AdminUserSummary[]>([]);
@@ -263,6 +272,22 @@ export class AdminUsersComponent implements OnInit {
         this.page.set(0);
         this.load();
       });
+    // Nav submenu presets (e.g. ?blocked=true) share this page: re-apply on change.
+    this.route.queryParamMap
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe((params) => this.applyQueryParams(params));
+  }
+
+  private applyQueryParams(params: ParamMap): void {
+    const role = params.get('role');
+    this.roleFilter.set(role === 'VISITOR' || role === 'HOST' || role === 'ADMIN' ? role : '');
+    const verified = params.get('verified');
+    this.verifiedFilter.set(verified === 'true' || verified === 'false' ? verified : '');
+    const blocked = params.get('blocked');
+    this.blockedFilter.set(blocked === 'true' || blocked === 'false' ? blocked : '');
+    this.searchControl.setValue(params.get('search') ?? '', { emitEvent: false });
+    this.page.set(0);
+    this.selected.set([]);
     this.load();
   }
 
