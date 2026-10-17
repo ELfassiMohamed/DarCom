@@ -2,7 +2,7 @@
    for Angular standalone pages. No UI library, plain CSS only.
    Login (/login) and Register (/register) share the sliding-panels card;
    the visible side is driven by the route (register adds .sign-up-mode).
-   Verify-email and Home reuse the same gradient + white card via .single. */
+   Verify-email and Home reuse the same white card via .single. */
 
 .auth,
 .auth * {
@@ -11,7 +11,6 @@
 
 .auth {
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   min-height: 100vh;
   width: 100%;
   display: flex;
@@ -256,7 +255,7 @@ input.btn:disabled {
 }
 
 .panel .content {
-  color: #fff;
+  color: #444;
   transition: transform 0.9s ease-in-out;
   transition-delay: 0.6s;
 }
@@ -278,7 +277,8 @@ input.btn:disabled {
 .btn.transparent {
   margin: 0;
   background: none;
-  border: 2px solid #fff;
+  border: 2px solid #667eea;
+  color: #667eea;
   width: 130px;
   height: 41px;
   font-weight: 600;
@@ -286,18 +286,13 @@ input.btn:disabled {
 }
 
 .btn.transparent:hover {
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(102, 126, 234, 0.1);
   transform: translateY(-2px);
   box-shadow: none;
 }
 
 .right-panel .content {
   transform: translateX(800px);
-}
-
-.container.sign-up-mode:before {
-  transform: translate(100%, -50%);
-  right: 52%;
 }
 
 .container.sign-up-mode .left-panel .content {
@@ -330,20 +325,6 @@ input.btn:disabled {
   pointer-events: all;
 }
 
-.container:before {
-  content: "";
-  position: absolute;
-  height: 2000px;
-  width: 2000px;
-  top: -10%;
-  right: 48%;
-  transform: translateY(-50%);
-  background: linear-gradient(-45deg, #667eea 0%, #764ba2 100%);
-  transition: 1.8s ease-in-out;
-  border-radius: 50%;
-  z-index: 6;
-}
-
 /* Single centered card (verify-email, home) reusing the same language. */
 .container.single {
   max-width: 560px;
@@ -355,10 +336,6 @@ input.btn:disabled {
   align-items: center;
   text-align: center;
   overflow: visible;
-}
-
-.container.single:before {
-  display: none;
 }
 
 .container.single .title {
@@ -487,21 +464,6 @@ input.btn:disabled {
     width: 110px;
     height: 35px;
     font-size: 0.7rem;
-  }
-  .container:before {
-    width: 1500px;
-    height: 1500px;
-    transform: translateX(-50%);
-    left: 30%;
-    bottom: 68%;
-    right: initial;
-    top: initial;
-    transition: 2s ease-in-out;
-  }
-  .container.sign-up-mode:before {
-    transform: translate(-50%, 100%);
-    bottom: 32%;
-    right: initial;
   }
   .container.sign-up-mode .left-panel .content {
     transform: translateY(-300px);
