@@ -1,8 +1,7 @@
-/* Shared auth theme, adapted from auth-component.txt (React AuthSwitch)
-   for Angular standalone pages. No UI library, plain CSS only.
-   Login (/login) and Register (/register) share the sliding-panels card;
-   the visible side is driven by the route (register adds .sign-up-mode).
-   Verify-email and Home reuse the same white card via .single. */
+/* Shared auth theme for the remaining pages that reuse it: verify-email and home.
+   Originally adapted from auth-component.txt (React AuthSwitch); the sliding
+   sign-in/sign-up panels were removed when login, register, forgot-password and
+   reset-password moved to the Tailwind "Connect Signin" card (shared/auth-card). */
 
 .auth,
 .auth * {
@@ -10,7 +9,12 @@
 }
 
 .auth {
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-family:
+    'Inter',
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    sans-serif;
   min-height: 100vh;
   width: 100%;
   display: flex;
@@ -31,30 +35,6 @@
   overflow: hidden;
 }
 
-.container.tall {
-  height: 680px;
-}
-
-.forms-container {
-  position: absolute;
-  width: 100%;
-  height: 100%;
-  top: 0;
-  left: 0;
-}
-
-.signin-signup {
-  position: absolute;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  left: 75%;
-  width: 50%;
-  transition: 1s 0.7s ease-in-out;
-  display: grid;
-  grid-template-columns: 1fr;
-  z-index: 5;
-}
-
 .auth form {
   display: flex;
   align-items: center;
@@ -65,15 +45,6 @@
   overflow: hidden;
   grid-column: 1 / 2;
   grid-row: 1 / 2;
-}
-
-.auth form.sign-up-form {
-  opacity: 0;
-  z-index: 1;
-}
-
-.auth form.sign-in-form {
-  z-index: 2;
 }
 
 .title {
@@ -225,106 +196,6 @@ input.btn:disabled {
   text-decoration: underline;
 }
 
-.panels-container {
-  position: absolute;
-  height: 100%;
-  width: 100%;
-  top: 0;
-  left: 0;
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-}
-
-.panel {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  justify-content: space-around;
-  text-align: center;
-  z-index: 6;
-}
-
-.left-panel {
-  pointer-events: all;
-  padding: 3rem 17% 2rem 12%;
-}
-
-.right-panel {
-  pointer-events: none;
-  padding: 3rem 12% 2rem 17%;
-}
-
-.panel .content {
-  color: #444;
-  transition: transform 0.9s ease-in-out;
-  transition-delay: 0.6s;
-}
-
-.panel h3 {
-  font-weight: 600;
-  line-height: 1;
-  font-size: 1.5rem;
-  margin-bottom: 10px;
-  margin-top: 0;
-}
-
-.panel p {
-  font-size: 0.95rem;
-  padding: 0.7rem 0;
-  margin: 0;
-}
-
-.btn.transparent {
-  margin: 0;
-  background: none;
-  border: 2px solid #667eea;
-  color: #667eea;
-  width: 130px;
-  height: 41px;
-  font-weight: 600;
-  font-size: 0.8rem;
-}
-
-.btn.transparent:hover {
-  background: rgba(102, 126, 234, 0.1);
-  transform: translateY(-2px);
-  box-shadow: none;
-}
-
-.right-panel .content {
-  transform: translateX(800px);
-}
-
-.container.sign-up-mode .left-panel .content {
-  transform: translateX(-800px);
-}
-
-.container.sign-up-mode .signin-signup {
-  left: 25%;
-}
-
-.container.sign-up-mode form.sign-up-form {
-  opacity: 1;
-  z-index: 2;
-}
-
-.container.sign-up-mode form.sign-in-form {
-  opacity: 0;
-  z-index: 1;
-}
-
-.container.sign-up-mode .right-panel .content {
-  transform: translateX(0%);
-}
-
-.container.sign-up-mode .left-panel {
-  pointer-events: none;
-}
-
-.container.sign-up-mode .right-panel {
-  pointer-events: all;
-}
-
 /* Single centered card (verify-email, home) reusing the same language. */
 .container.single {
   max-width: 560px;
@@ -418,66 +289,6 @@ input.btn:disabled {
     height: 100vh;
     max-height: none;
   }
-  .container.tall {
-    height: 100vh;
-  }
-  .signin-signup {
-    width: 100%;
-    top: 95%;
-    transform: translate(-50%, -100%);
-    transition: 1s 0.8s ease-in-out;
-  }
-  .signin-signup,
-  .container.sign-up-mode .signin-signup {
-    left: 50%;
-  }
-  .panels-container {
-    grid-template-columns: 1fr;
-    grid-template-rows: 1fr 2fr 1fr;
-  }
-  .panel {
-    flex-direction: row;
-    justify-content: space-around;
-    align-items: center;
-    padding: 2.5rem 8%;
-    grid-column: 1 / 2;
-  }
-  .right-panel {
-    grid-row: 3 / 4;
-  }
-  .left-panel {
-    grid-row: 1 / 2;
-  }
-  .panel .content {
-    padding-right: 15%;
-    transition: transform 0.9s ease-in-out;
-    transition-delay: 0.8s;
-  }
-  .panel h3 {
-    font-size: 1.2rem;
-  }
-  .panel p {
-    font-size: 0.7rem;
-    padding: 0.5rem 0;
-  }
-  .btn.transparent {
-    width: 110px;
-    height: 35px;
-    font-size: 0.7rem;
-  }
-  .container.sign-up-mode .left-panel .content {
-    transform: translateY(-300px);
-  }
-  .container.sign-up-mode .right-panel .content {
-    transform: translateY(0px);
-  }
-  .right-panel .content {
-    transform: translateY(300px);
-  }
-  .container.sign-up-mode .signin-signup {
-    top: 5%;
-    transform: translate(-50%, 0);
-  }
   .container.single {
     min-height: 0;
     height: auto;
@@ -488,8 +299,5 @@ input.btn:disabled {
 @media (max-width: 570px) {
   .auth form {
     padding: 0 1.5rem;
-  }
-  .panel .content {
-    padding: 0.5rem 1rem;
   }
 }

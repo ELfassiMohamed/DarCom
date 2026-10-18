@@ -37,6 +37,11 @@ export const routes: Routes = [
       import('./pages/admin-users/admin-users.component').then((m) => m.AdminUsersComponent),
     canActivate: [authGuard, adminGuard],
   },
-  { path: '', pathMatch: 'full', redirectTo: 'home' },
+  {
+    path: '',
+    loadComponent: () =>
+      import('./pages/landing/landing.component').then((m) => m.LandingComponent),
+    pathMatch: 'full',
+  },
   { path: '**', redirectTo: 'home' },
 ];

@@ -1,42 +1,66 @@
 import { Component, inject, signal } from '@angular/core';
 import { FormControl, FormGroup, ReactiveFormsModule, Validators } from '@angular/forms';
 import { RouterLink } from '@angular/router';
+import { AuthCardComponent } from '../../shared/auth-card/auth-card.component';
 import { AuthService } from '../../core/auth.service';
 
 @Component({
   selector: 'app-forgot-password',
   standalone: true,
-  imports: [ReactiveFormsModule, RouterLink],
+  imports: [ReactiveFormsModule, RouterLink, AuthCardComponent],
   template: `
-    <div class="auth">
-      <div class="container single">
-        <h2 class="title">Reset password</h2>
-        @if (sent()) {
-          <p class="form-ok">If the account exists, a reset link was sent to your email.</p>
-          <p class="alt"><a routerLink="/login">Back to login</a></p>
-        } @else {
-          <p>Enter your account email. We'll send you a reset link.</p>
-          <form [formGroup]="form" (ngSubmit)="onSubmit()" novalidate>
-            <div class="input-field">
-              <span class="ico">&#64;</span>
-              <input type="email" placeholder="Email" formControlName="email" autocomplete="email" />
-            </div>
-            @if (form.controls.email.touched && form.controls.email.invalid) {
-              <p class="field-error">Enter a valid email address.</p>
-            }
+    <app-auth-card tagline="We'll send a reset link to your email so you can get back in.">
+      <h1 class="text-2xl md:text-3xl font-bold mb-1 text-gray-800">Forgot password?</h1>
+      <p class="text-gray-500 mb-8">Enter your account email</p>
+
+      @if (sent()) {
+        <p class="auth-alert-ok">If the account exists, a reset link was sent to your email.</p>
+        <p class="text-center mt-6">
+          <a class="auth-link" routerLink="/login">Back to login</a>
+        </p>
+      } @else {
+        <form class="space-y-5" [formGroup]="form" (ngSubmit)="onSubmit()" novalidate>
+          <div>
+            <label class="auth-label" for="forgot-email">
+              Email <span class="auth-required">*</span>
+            </label>
             <input
-              type="submit"
-              value="Send reset link"
-              class="btn"
-              [disabled]="form.invalid || sending()"
+              id="forgot-email"
+              class="auth-input"
+              type="email"
+              placeholder="Enter your email address"
+              formControlName="email"
+              autocomplete="email"
             />
-          </form>
-          <p class="alt"><a routerLink="/login">Back to login</a></p>
-        }
-      </div>
-    </div>
+            @if (form.controls.email.touched && form.controls.email.invalid) {
+              <p class="auth-field-error">Enter a valid email address.</p>
+            }
+          </div>
+
+          <button type="submit" class="auth-btn" [disabled]="form.invalid || sending()">
+            {{ sending() ? 'Sending...' : 'Send reset link' }}
+            <svg
+              class="h-4 w-4"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M5 12h14" />
+              <path d="m12 5 7 7-7 7" />
+            </svg>
+          </button>
+
+          <div class="text-center mt-6">
+            <a class="auth-link" routerLink="/login">Back to login</a>
+          </div>
+        </form>
+      }
+    </app-auth-card>
   `,
-  styleUrls: ['../auth/auth-shell.css'],
 })
 export class ForgotPasswordComponent {
   private readonly auth = inject(AuthService);
@@ -45,7 +69,10 @@ export class ForgotPasswordComponent {
   readonly sent = signal(false);
 
   readonly form = new FormGroup({
-    email: new FormControl('', { nonNullable: true, validators: [Validators.required, Validators.email] }),
+    email: new FormControl('', {
+      nonNullable: true,
+      validators: [Validators.required, Validators.email],
+    }),
   });
 
   onSubmit(): void {
