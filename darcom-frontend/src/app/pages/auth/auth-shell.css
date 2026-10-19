@@ -1,0 +1,303 @@
+/* Shared auth theme for the remaining pages that reuse it: verify-email and home.
+   Originally adapted from auth-component.txt (React AuthSwitch); the sliding
+   sign-in/sign-up panels were removed when login, register, forgot-password and
+   reset-password moved to the Tailwind "Connect Signin" card (shared/auth-card). */
+
+.auth,
+.auth * {
+  box-sizing: border-box;
+}
+
+.auth {
+  font-family:
+    'Inter',
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    sans-serif;
+  min-height: 100vh;
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 20px;
+}
+
+.container {
+  position: relative;
+  width: 100%;
+  max-width: 900px;
+  height: 620px;
+  max-height: calc(100vh - 40px);
+  background: white;
+  border-radius: 20px;
+  box-shadow: 0 25px 50px rgba(0, 0, 0, 0.2);
+  overflow: hidden;
+}
+
+.auth form {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  padding: 0 5rem;
+  transition: all 0.2s 0.7s;
+  overflow: hidden;
+  grid-column: 1 / 2;
+  grid-row: 1 / 2;
+}
+
+.title {
+  font-size: 2.2rem;
+  color: #444;
+  margin-bottom: 10px;
+  margin-top: 0;
+  font-weight: 700;
+}
+
+.input-field {
+  max-width: 380px;
+  width: 100%;
+  background-color: #f0f0f0;
+  margin: 10px 0;
+  height: 55px;
+  border-radius: 55px;
+  display: grid;
+  grid-template-columns: 15% 85%;
+  padding: 0 0.4rem;
+  position: relative;
+  transition: 0.3s;
+}
+
+.input-field:focus-within {
+  background-color: #e8e8e8;
+  box-shadow: 0 0 0 2px #667eea;
+}
+
+.input-field .ico {
+  text-align: center;
+  line-height: 55px;
+  color: #666;
+  font-size: 1.1rem;
+  font-style: normal;
+}
+
+.input-field input,
+.input-field select {
+  background: none;
+  outline: none;
+  border: none;
+  line-height: 1;
+  font-weight: 500;
+  font-size: 1rem;
+  color: #333;
+  width: 100%;
+  font-family: inherit;
+}
+
+.input-field input::placeholder {
+  color: #aaa;
+  font-weight: 400;
+}
+
+.input-field select {
+  cursor: pointer;
+  padding-right: 1rem;
+}
+
+.btn {
+  width: 150px;
+  background-color: #667eea;
+  border: none;
+  outline: none;
+  height: 49px;
+  border-radius: 49px;
+  color: #fff;
+  text-transform: uppercase;
+  font-weight: 600;
+  margin: 10px 0;
+  cursor: pointer;
+  transition: 0.5s;
+  font-size: 0.9rem;
+  font-family: inherit;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.btn:hover:not(:disabled) {
+  background-color: #5568d3;
+  transform: translateY(-2px);
+  box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+}
+
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+input.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.field-error {
+  max-width: 380px;
+  width: 100%;
+  margin: 0;
+  padding: 0 1rem;
+  color: #b00020;
+  font-size: 0.8rem;
+  text-align: left;
+}
+
+.form-error {
+  max-width: 380px;
+  width: 100%;
+  margin: 6px 0 0;
+  padding: 0.6rem 1rem;
+  color: #b00020;
+  background: #fdecea;
+  border: 1px solid #f5c6cb;
+  border-radius: 12px;
+  font-size: 0.9rem;
+  text-align: center;
+}
+
+.form-ok {
+  max-width: 380px;
+  width: 100%;
+  margin: 6px 0 0;
+  padding: 0.6rem 1rem;
+  color: #1b6e3c;
+  background: #e6f4ea;
+  border: 1px solid #a8d5ba;
+  border-radius: 12px;
+  font-size: 0.9rem;
+  text-align: center;
+}
+
+.alt {
+  font-size: 0.9rem;
+  color: #666;
+  margin: 8px 0 0;
+  text-align: center;
+}
+
+.alt a {
+  color: #667eea;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.alt a:hover {
+  text-decoration: underline;
+}
+
+/* Single centered card (verify-email, home) reusing the same language. */
+.container.single {
+  max-width: 560px;
+  height: auto;
+  min-height: 0;
+  padding: 2.5rem 2rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  overflow: visible;
+}
+
+.container.single .title {
+  margin-bottom: 0.5rem;
+}
+
+.container.single p {
+  color: #555;
+}
+
+.container.single .form-error,
+.container.single .form-ok {
+  max-width: 440px;
+}
+
+.container.single form {
+  padding: 0;
+  width: 100%;
+}
+
+.container.single .input-field {
+  max-width: 440px;
+}
+
+.profile {
+  width: 100%;
+  max-width: 440px;
+  margin: 1rem 0;
+  border: 1px solid #eee;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.profile-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.6rem 1rem;
+  font-size: 0.95rem;
+}
+
+.profile-row:nth-child(odd) {
+  background: #f7f7fb;
+}
+
+.profile-row dt {
+  font-weight: 600;
+  color: #444;
+}
+
+.profile-row dd {
+  margin: 0;
+  color: #333;
+  word-break: break-all;
+}
+
+.pill {
+  display: inline-block;
+  padding: 0.15rem 0.7rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  background: #eef0ff;
+  color: #5568d3;
+}
+
+.pill.ok {
+  background: #e6f4ea;
+  color: #1b6e3c;
+}
+
+.pill.warn {
+  background: #fef3e2;
+  color: #9a5b00;
+}
+
+@media (max-width: 870px) {
+  .container {
+    min-height: 800px;
+    height: 100vh;
+    max-height: none;
+  }
+  .container.single {
+    min-height: 0;
+    height: auto;
+    padding: 2rem 1.25rem;
+  }
+}
+
+@media (max-width: 570px) {
+  .auth form {
+    padding: 0 1.5rem;
+  }
+}

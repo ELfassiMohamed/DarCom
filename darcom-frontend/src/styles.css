@@ -1,3 +1,77 @@
 /* You can add global styles to this file, and also import other style files */
 
 @import 'tailwindcss';
+
+/* DarCom brand colors, matching the plain-CSS pages (#667eea / #5568d3). */
+@theme {
+  --color-brand: #667eea;
+  --color-brand-dark: #5568d3;
+}
+
+/* Auth pages, ported from `Connect Signin.txt`.
+   The original defines Button/Input components with a base class list; these are
+   the same styles as reusable classes. shadcn-only tokens used in the original
+   (bg-background, border-input, ring-offset-background, ...) do not exist in this
+   project, so they are replaced with concrete colors. */
+@layer components {
+  .auth-label {
+    @apply mb-1 block text-sm font-medium text-gray-700;
+  }
+
+  .auth-required {
+    @apply text-blue-500;
+  }
+
+  .auth-input {
+    @apply flex h-10 w-full rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-800 placeholder:text-gray-400;
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2;
+    @apply disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .auth-btn {
+    @apply relative inline-flex w-full items-center justify-center gap-2 overflow-hidden whitespace-nowrap rounded-lg bg-gradient-to-r from-blue-500 to-indigo-600 py-2 text-sm font-medium text-white;
+    @apply transition-all duration-300 hover:from-blue-600 hover:to-indigo-700 hover:scale-[1.01] hover:shadow-lg hover:shadow-blue-200 active:scale-[0.98];
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50;
+  }
+
+  /* Shine sweep on hover (the original renders an animated blurred span). */
+  .auth-btn::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -75%;
+    width: 50%;
+    background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.3), transparent);
+    filter: blur(8px);
+    pointer-events: none;
+  }
+  .auth-btn:hover::after {
+    animation: auth-shine 1s ease-in-out;
+  }
+
+  .auth-field-error {
+    @apply mt-1 text-xs text-red-600;
+  }
+
+  .auth-alert-error {
+    @apply rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700;
+  }
+
+  .auth-alert-ok {
+    @apply rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-700;
+  }
+
+  .auth-link {
+    @apply text-sm text-blue-600 transition-colors hover:text-blue-700;
+  }
+}
+
+@keyframes auth-shine {
+  from {
+    left: -75%;
+  }
+  to {
+    left: 125%;
+  }
+}

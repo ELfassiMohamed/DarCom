@@ -1,0 +1,265 @@
+/* Admin top dropdown nav — plain-CSS port of Dorpdown Navigation.txt.
+   White sticky bar, pill hover on top buttons, rotating chevron,
+   hover/click mega-menu card with icon tiles. No UI library. */
+.adminbar {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: #fff;
+  border-bottom: 1px solid #e8e8ef;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+.bar-inner {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 0 20px;
+  min-height: 60px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.brand {
+  font-weight: 700;
+  font-size: 1.05rem;
+  color: #222;
+  text-decoration: none;
+  white-space: nowrap;
+  margin-right: 12px;
+}
+.brand span {
+  color: #667eea;
+}
+.burger {
+  display: none;
+  margin-left: auto;
+  border: 1px solid #ddd;
+  background: #fff;
+  border-radius: 8px;
+  padding: 6px;
+  cursor: pointer;
+  color: #444;
+}
+.burger svg {
+  width: 22px;
+  height: 22px;
+  display: block;
+}
+.nav {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.menu {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  align-items: center;
+}
+.item {
+  position: relative;
+}
+.topbtn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 0.875rem;
+  color: #666;
+  padding: 8px 14px;
+  border-radius: 999px;
+  cursor: pointer;
+  text-decoration: none;
+  transition: color 0.3s, background 0.3s;
+  white-space: nowrap;
+}
+.topbtn:hover,
+.topbtn.active {
+  color: #222;
+  background: rgba(102, 126, 234, 0.12);
+}
+.topbtn.sel {
+  color: #222;
+  background: rgba(102, 126, 234, 0.12);
+}
+.chev {
+  width: 16px;
+  height: 16px;
+  transition: transform 0.3s;
+}
+.chev.rot {
+  transform: rotate(180deg);
+}
+.drop {
+  position: absolute;
+  left: 0;
+  top: 100%;
+  padding-top: 8px;
+}
+.drop-card {
+  background: #fff;
+  border: 1px solid #e8e8ef;
+  border-radius: 16px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.12);
+  padding: 16px;
+}
+.groups {
+  display: flex;
+  gap: 36px;
+}
+.group h3 {
+  margin: 0 0 12px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: capitalize;
+  color: #888;
+}
+.group ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.sub {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  text-decoration: none;
+  border-radius: 8px;
+  white-space: nowrap;
+}
+.tile {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #e3e3ea;
+  border-radius: 8px;
+  color: #333;
+  transition: background 0.3s, color 0.3s;
+}
+.tile svg {
+  width: 20px;
+  height: 20px;
+}
+.sub:hover .tile {
+  background: #eef0ff;
+  color: #5568d3;
+}
+.sub .t {
+  display: block;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #222;
+}
+.sub .d {
+  display: block;
+  font-size: 0.75rem;
+  color: #888;
+  transition: color 0.3s;
+}
+.sub:hover .d {
+  color: #222;
+}
+.sub.sel .tile {
+  background: #eef0ff;
+  color: #5568d3;
+  border-color: #667eea;
+}
+.side {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.who {
+  font-size: 0.8rem;
+  color: #888;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.logout {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid #f5c6cb;
+  background: #fff;
+  color: #b00020;
+  border-radius: 999px;
+  padding: 7px 14px;
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.3s;
+  white-space: nowrap;
+}
+.logout:hover:not(:disabled) {
+  background: #fdecea;
+}
+.logout:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.logout svg {
+  width: 16px;
+  height: 16px;
+}
+@media (max-width: 760px) {
+  .burger {
+    display: block;
+  }
+  .nav {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background: #fff;
+    border-bottom: 1px solid #e8e8ef;
+    flex-direction: column;
+    align-items: stretch;
+    padding: 12px 20px 16px;
+    gap: 4px;
+  }
+  .nav.open {
+    display: flex;
+  }
+  .menu {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .topbtn {
+    width: 100%;
+    justify-content: flex-start;
+  }
+  .drop {
+    position: static;
+    padding-top: 4px;
+  }
+  .drop-card {
+    box-shadow: none;
+  }
+  .groups {
+    flex-direction: column;
+    gap: 20px;
+  }
+  .side {
+    margin-left: 0;
+    justify-content: space-between;
+  }
+  .who {
+    display: none;
+  }
+}
