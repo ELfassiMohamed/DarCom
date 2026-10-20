@@ -1,15 +1,17 @@
 import { Component, OnInit, inject, signal } from '@angular/core';
-import { Router, RouterLink } from '@angular/router';
+import { RouterLink } from '@angular/router';
 import { AuthService } from '../../core/auth.service';
 import { toUserMessage } from '../../core/error-messages';
 import { User } from '../../core/models';
+import { MegaNavComponent } from '../../shared/mega-nav/mega-nav.component';
 
 @Component({
   selector: 'app-home',
   standalone: true,
-  imports: [RouterLink],
+  imports: [RouterLink, MegaNavComponent],
   template: `
-    <div class="auth">
+    <app-mega-nav />
+    <div class="auth home-page">
       <div class="container single">
         <h2 class="title">Welcome</h2>
         @if (loading()) {
@@ -42,7 +44,6 @@ import { User } from '../../core/models';
             </div>
           </dl>
         }
-        <button type="button" class="btn" (click)="onLogout()" [disabled]="loggingOut()">Logout</button>
         @if (user()?.role === 'ADMIN') {
           <p class="alt"><a routerLink="/admin/users">Manage users</a></p>
         }
@@ -50,15 +51,18 @@ import { User } from '../../core/models';
     </div>
   `,
   styleUrls: ['../auth/auth-shell.css'],
+  styles: `
+    .home-page {
+      min-height: calc(100vh - 84px);
+    }
+  `,
 })
 export class HomeComponent implements OnInit {
   private readonly auth = inject(AuthService);
-  private readonly router = inject(Router);
 
   readonly user = signal<User | null>(null);
   readonly loading = signal(true);
   readonly errorMsg = signal<string | null>(null);
-  readonly loggingOut = signal(false);
 
   ngOnInit(): void {
     this.auth.me().subscribe({
@@ -69,23 +73,6 @@ export class HomeComponent implements OnInit {
       error: (err: unknown) => {
         this.loading.set(false);
         this.errorMsg.set(toUserMessage(err));
-      },
-    });
-  }
-
-  onLogout(): void {
-    if (this.loggingOut()) {
-      return;
-    }
-    this.loggingOut.set(true);
-    this.auth.logout().subscribe({
-      next: () => {
-        this.loggingOut.set(false);
-        void this.router.navigate(['/login']);
-      },
-      error: () => {
-        this.loggingOut.set(false);
-        void this.router.navigate(['/login']);
       },
     });
   }

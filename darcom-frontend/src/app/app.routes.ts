@@ -32,10 +32,41 @@ export const routes: Routes = [
     canActivate: [authGuard],
   },
   {
+    path: 'profile',
+    loadComponent: () => import('./pages/profile/profile.component').then((m) => m.ProfileComponent),
+    canActivate: [authGuard],
+  },
+  {
     path: 'admin/users',
     loadComponent: () =>
       import('./pages/admin-users/admin-users.component').then((m) => m.AdminUsersComponent),
     canActivate: [authGuard, adminGuard],
+  },
+  {
+    path: 'admin/reports',
+    loadComponent: () =>
+      import('./pages/admin-placeholder/admin-placeholder.component').then(
+        (m) => m.AdminPlaceholderComponent,
+      ),
+    canActivate: [authGuard, adminGuard],
+    data: {
+      title: 'Reports',
+      description:
+        'User reports and flagged content will be reviewed from this page once the reporting API is available.',
+    },
+  },
+  {
+    path: 'admin/logs',
+    loadComponent: () =>
+      import('./pages/admin-placeholder/admin-placeholder.component').then(
+        (m) => m.AdminPlaceholderComponent,
+      ),
+    canActivate: [authGuard, adminGuard],
+    data: {
+      title: 'Logs',
+      description:
+        'Account and moderation activity will be listed here once the audit-log API is available.',
+    },
   },
   {
     path: '',

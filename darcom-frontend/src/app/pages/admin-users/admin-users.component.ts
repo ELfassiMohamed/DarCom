@@ -6,16 +6,16 @@ import { debounceTime, distinctUntilChanged } from 'rxjs';
 import { AdminService } from '../../core/admin.service';
 import { toUserMessage } from '../../core/error-messages';
 import { AdminSortField, AdminUserSummary, Role } from '../../core/models';
-import { AdminNavComponent } from '../../shared/admin-nav/admin-nav.component';
+import { MegaNavComponent } from '../../shared/mega-nav/mega-nav.component';
 
 const PAGE_SIZE = 10;
 
 @Component({
   selector: 'app-admin-users',
   standalone: true,
-  imports: [ReactiveFormsModule, AdminNavComponent],
+  imports: [ReactiveFormsModule, MegaNavComponent],
   template: `
-    <app-admin-nav />
+    <app-mega-nav />
     <div class="admin-page">
       <div class="wrap">
         <div class="card">
