@@ -3,8 +3,10 @@
   "version": "0.0.0",
   "scripts": {
     "ng": "ng",
-    "start": "ng serve --port 3000 --proxy-config proxy.conf.json",
+    "start": "ng serve --port 4200 --proxy-config proxy.conf.json",
+    "start:mock": "ng serve --port 4300 --configuration mock",
     "build": "ng build",
+    "build:mock": "ng build --configuration mock",
     "watch": "ng build --watch --configuration development",
     "test": "ng test",
     "serve:ssr:darcom-frontend": "node dist/darcom-frontend/server/server.mjs"
@@ -32,10 +34,16 @@
     "@types/express": "^5.0.1",
     "@types/node": "^20.17.19",
     "jsdom": "^28.0.0",
+    "msw": "^2.15.0",
     "postcss": "^8.5.3",
     "prettier": "^3.8.1",
     "tailwindcss": "^4.1.12",
     "typescript": "~5.9.2",
     "vitest": "^4.0.8"
+  },
+  "msw": {
+    "workerDirectory": [
+      "public"
+    ]
   }
 }

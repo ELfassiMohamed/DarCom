@@ -33,6 +33,13 @@
           },
           "configurations": {
             "production": {
+              "assets": [
+                {
+                  "glob": "**/*",
+                  "input": "public",
+                  "ignore": ["mockServiceWorker.js"]
+                }
+              ],
               "budgets": [
                 {
                   "type": "initial",
@@ -51,6 +58,19 @@
               "optimization": false,
               "extractLicenses": false,
               "sourceMap": true
+            },
+            "mock": {
+              "browser": "src/main.mock.ts",
+              "outputPath": "dist/darcom-frontend-mock",
+              "fileReplacements": [
+                {
+                  "replace": "src/environments/environment.ts",
+                  "with": "src/environments/environment.mock.ts"
+                }
+              ],
+              "optimization": false,
+              "extractLicenses": false,
+              "sourceMap": true
             }
           },
           "defaultConfiguration": "production"
@@ -63,12 +83,18 @@
             },
             "development": {
               "buildTarget": "darcom-frontend:build:development"
+            },
+            "mock": {
+              "buildTarget": "darcom-frontend:build:mock"
             }
           },
           "defaultConfiguration": "development"
         },
         "test": {
-          "builder": "@angular/build:unit-test"
+          "builder": "@angular/build:unit-test",
+          "options": {
+            "setupFiles": ["src/test-setup.ts"]
+          }
         }
       }
     }

@@ -4,13 +4,52 @@ This project was generated using [Angular CLI](https://github.com/angular/angula
 
 ## Development server
 
-To start a local development server, run:
+To start a local development server against the Jakarta EE backend, run:
 
 ```bash
-ng serve
+npm start
 ```
 
-Once the server is running, open your browser and navigate to `http://localhost:4200/`. The application will automatically reload whenever you modify any of the source files.
+Open `http://localhost:4200/`. The dev server proxies `/api` to
+`http://localhost:8080/darcom-backend` via `proxy.conf.json`.
+
+Port `3000` is reserved for nginx, so the Angular dev servers do not use it.
+
+To run the frontend **without the backend**, using the MSW mock API:
+
+```bash
+npm run start:mock
+```
+
+Open `http://localhost:4300/`. See
+[`docs/MSW_INTEGRATION.md`](docs/MSW_INTEGRATION.md) for the integration
+architecture, complete seed data, endpoint behavior, tests, and troubleshooting.
+The shorter quick reference is in [`src/mocks/README.md`](src/mocks/README.md).
+
+## Nginx and production builds
+
+```bash
+npm run build
+```
+
+This writes the real-backend build to `dist/darcom-frontend/browser`. Nginx
+should serve that directory; it contains no MSW code and no
+`mockServiceWorker.js`.
+
+The mock build is deliberately written to a different directory:
+
+```bash
+npm run build:mock
+# dist/darcom-frontend-mock/browser
+```
+
+Never point nginx at `dist/darcom-frontend-mock`. It is only for previewing the
+mock version.
+
+If you previously opened the mock build on the same origin (for example
+`http://localhost:3000`), unregister its service worker once in DevTools:
+**Application → Service Workers → Unregister**, then clear site data and reload.
+Otherwise the old MSW worker can keep intercepting `/api` requests.
 
 ## Code scaffolding
 

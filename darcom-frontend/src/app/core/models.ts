@@ -15,7 +15,7 @@ export interface LoginRequest {
 }
 
 export interface SessionUser {
-  id: number;
+  id: string;
   email: string;
   role: Role;
   verified: boolean;
@@ -34,7 +34,7 @@ export interface RefreshResponse {
 }
 
 export interface User {
-  id: number;
+  id: string;
   email: string;
   fullName: string;
   phone: string | null;
@@ -45,7 +45,7 @@ export interface User {
 }
 
 export interface RegisteredUser {
-  id: number;
+  id: string;
   email: string;
   fullName: string;
   role: Role;

@@ -61,8 +61,8 @@ export class AuthService {
     );
   }
 
-  verifyEmail(token: string): Observable<SessionUser> {
-    return this.http.post<SessionUser>(`${API_URL}/auth/verify-email`, { token });
+  verifyEmail(token: string): Observable<User> {
+    return this.http.post<User>(`${API_URL}/auth/verify-email`, { token });
   }
 
   resendVerification(email: string): Observable<void> {
