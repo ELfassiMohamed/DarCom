@@ -87,6 +87,29 @@ describe('MSW API', () => {
     expect(body.totalPages).toBeGreaterThan(1);
   });
 
+  it('reads and updates the current profile', async () => {
+    const session = await login('visitor@darcom.test');
+    const headers = {
+      Authorization: `Bearer ${session.accessToken}`,
+      'Content-Type': 'application/json',
+    };
+
+    const read = await fetch(`${API}/users/me`, { headers });
+    expect(read.status).toBe(200);
+    expect(((await read.json()) as { fullName: string }).fullName).toBe('Val Visitor');
+
+    const update = await fetch(`${API}/users/me`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ fullName: 'Val Updated', phone: null }),
+    });
+    expect(update.status).toBe(200);
+
+    const updated = (await update.json()) as { fullName: string; phone: string | null };
+    expect(updated.fullName).toBe('Val Updated');
+    expect(updated.phone).toBeNull();
+  });
+
   it('blocks and unblocks a user', async () => {
     const session = await login('admin@darcom.test');
     const headers = {

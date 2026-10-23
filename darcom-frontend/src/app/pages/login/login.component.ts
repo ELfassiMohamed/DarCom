@@ -114,9 +114,12 @@ export class LoginComponent {
     this.errorMsg.set(null);
     const { email, password } = this.form.getRawValue();
     this.auth.login(email, password).subscribe({
-      next: () => {
+      next: (res) => {
         this.loading.set(false);
-        void this.router.navigate(['/home']);
+        // Hosts and visitors land on the shared /home dashboard; admins go to
+        // their user-management workspace.
+        const landingUrl = res.user.role === 'ADMIN' ? '/admin/users' : '/home';
+        void this.router.navigate([landingUrl]);
       },
       error: (err: unknown) => {
         this.loading.set(false);

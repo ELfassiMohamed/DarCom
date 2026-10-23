@@ -129,29 +129,15 @@
   font-weight: 700;
 }
 
-.who-text {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  line-height: 1.2;
-}
-
-.who-email {
-  max-width: 170px;
+.who-name {
+  max-width: 160px;
   overflow: hidden;
   color: #3f3f46;
-  font-size: 0.8rem;
+  font-size: 0.85rem;
   font-weight: 600;
+  line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.who-role {
-  color: #a1a1aa;
-  font-size: 0.66rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
 }
 
 .logout {

@@ -1,9 +1,16 @@
-import { Component, ElementRef, HostListener, computed, inject, signal } from '@angular/core';
+import {
+  Component,
+  ElementRef,
+  HostListener,
+  OnInit,
+  computed,
+  inject,
+  signal,
+} from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { NavigationEnd, Router, RouterLink, RouterLinkActive } from '@angular/router';
 import { filter, map } from 'rxjs';
 import { AuthService } from '../../core/auth.service';
-import { Role } from '../../core/models';
 
 interface MegaLink {
   label: string;
@@ -89,12 +96,6 @@ const USER_NAV: NavEntry[] = [
   { id: 'profile', label: 'Profile', link: '/profile' },
 ];
 
-const ROLE_LABELS: Record<Role, string> = {
-  ADMIN: 'Admin',
-  HOST: 'Host',
-  VISITOR: 'Visitor',
-};
-
 /**
  * Authenticated user-space navigation, ported from `mega-nav-menu.txt`.
  *
@@ -156,13 +157,10 @@ const ROLE_LABELS: Record<Role, string> = {
             </nav>
 
             <div class="actions">
-              @if (currentUser(); as user) {
-                <div class="who" [title]="user.email">
+              @if (currentUser()) {
+                <div class="who">
                   <span class="avatar" aria-hidden="true">{{ initials() }}</span>
-                  <span class="who-text">
-                    <span class="who-email">{{ user.email }}</span>
-                    <span class="who-role">{{ roleLabel() }}</span>
-                  </span>
+                  <span class="who-name">{{ displayName() }}</span>
                 </div>
               }
               <button type="button" class="logout" (click)="onLogout()" [disabled]="loggingOut()">
@@ -288,13 +286,10 @@ const ROLE_LABELS: Record<Role, string> = {
               }
 
               <div class="m-account">
-                @if (currentUser(); as user) {
+                @if (currentUser()) {
                   <div class="m-who">
                     <span class="avatar" aria-hidden="true">{{ initials() }}</span>
-                    <span class="who-text">
-                      <span class="who-email">{{ user.email }}</span>
-                      <span class="who-role">{{ roleLabel() }}</span>
-                    </span>
+                    <span class="who-name">{{ displayName() }}</span>
                   </div>
                 }
                 <button type="button" class="logout full" (click)="onLogout()" [disabled]="loggingOut()">
@@ -314,7 +309,7 @@ const ROLE_LABELS: Record<Role, string> = {
   `,
   styleUrls: ['./mega-nav.css'],
 })
-export class MegaNavComponent {
+export class MegaNavComponent implements OnInit {
   private readonly auth = inject(AuthService);
   private readonly router = inject(Router);
   private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
@@ -338,14 +333,30 @@ export class MegaNavComponent {
   readonly activeMenu = computed(
     () => this.nav().find((entry) => entry.id === this.openMenu())?.menu ?? null,
   );
-  readonly roleLabel = computed(() => {
-    const role = this.currentUser()?.role;
-    return role ? ROLE_LABELS[role] : '';
+
+  /** Prefer the profile's full name, fall back to the email local part while loading. */
+  readonly displayName = computed(() => {
+    const fullName = this.auth.profile()?.fullName?.trim();
+    if (fullName) {
+      return fullName;
+    }
+    const localPart = this.currentUser()?.email.split('@')[0]?.trim();
+    return localPart || 'Account';
   });
+
   readonly initials = computed(() => {
-    const email = this.currentUser()?.email ?? '';
-    return email.split('@')[0].slice(0, 2).toUpperCase() || '?';
+    const parts = this.displayName().split(/\s+/).filter(Boolean);
+    if (parts.length >= 2) {
+      return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
+    }
+    return this.displayName().slice(0, 2).toUpperCase() || '?';
   });
+
+  ngOnInit(): void {
+    if (this.currentUser()) {
+      this.auth.loadProfile().subscribe({ error: () => undefined });
+    }
+  }
 
   isEntryActive(entry: NavEntry): boolean {
     return entry.activePrefix !== undefined && this.currentUrl().startsWith(entry.activePrefix);

@@ -1,6 +1,14 @@
 import { Injectable, inject, signal } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
-import { Observable, tap, catchError, throwError } from 'rxjs';
+import {
+  Observable,
+  catchError,
+  finalize,
+  of,
+  shareReplay,
+  tap,
+  throwError,
+} from 'rxjs';
 import { API_URL } from './api.config';
 import {
   LoginResponse,
@@ -8,6 +16,7 @@ import {
   RegisterRequest,
   RegisteredUser,
   SessionUser,
+  UpdateProfileRequest,
   User,
 } from './models';
 import { TokenStorageService } from './token-storage.service';
@@ -21,6 +30,13 @@ export class AuthService {
 
   readonly currentUser = signal<SessionUser | null>(this.tokens.getUser());
 
+  /**
+   * Full profile shared by the nav and the profile pages. Loaded lazily so the
+   * navbar can show the user's name without each page fetching it again.
+   */
+  readonly profile = signal<User | null>(null);
+  private profileRequest$: Observable<User> | null = null;
+
   register(body: RegisterRequest): Observable<RegisteredUser> {
     return this.http.post<RegisteredUser>(`${API_URL}/auth/register`, body);
   }
@@ -32,6 +48,8 @@ export class AuthService {
         tap((res) => {
           this.tokens.setSession(res);
           this.currentUser.set(res.user);
+          this.profile.set(null);
+          this.profileRequest$ = null;
         }),
       );
   }
@@ -81,6 +99,45 @@ export class AuthService {
     return this.http.get<User>(`${API_URL}/users/me`);
   }
 
+  /**
+   * Returns the cached profile when available. Concurrent callers share one
+   * in-flight request, so the nav and a page can both ask without duplicating it.
+   */
+  loadProfile(force = false): Observable<User> {
+    const cached = this.profile();
+    if (!force && cached) {
+      return of(cached);
+    }
+    if (!force && this.profileRequest$) {
+      return this.profileRequest$;
+    }
+
+    const request$ = this.me().pipe(
+      tap((user) => {
+        // Ignore a late response if the session changed while it was in flight.
+        if (this.currentUser()?.id === user.id) {
+          this.profile.set(user);
+        }
+      }),
+      finalize(() => {
+        this.profileRequest$ = null;
+      }),
+      shareReplay({ bufferSize: 1, refCount: false }),
+    );
+    this.profileRequest$ = request$;
+    return request$;
+  }
+
+  updateProfile(body: UpdateProfileRequest): Observable<User> {
+    return this.http.put<User>(`${API_URL}/users/me`, body).pipe(
+      tap((user) => {
+        if (this.currentUser()?.id === user.id) {
+          this.profile.set(user);
+        }
+      }),
+    );
+  }
+
   isLoggedIn(): boolean {
     return this.tokens.getAccessToken() !== null && this.tokens.getRefreshToken() !== null;
   }
@@ -88,5 +145,7 @@ export class AuthService {
   clearSession(): void {
     this.tokens.clear();
     this.currentUser.set(null);
+    this.profile.set(null);
+    this.profileRequest$ = null;
   }
 }

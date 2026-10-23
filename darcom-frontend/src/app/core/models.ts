@@ -44,6 +44,12 @@ export interface User {
   createdAt: string;
 }
 
+/** PUT /users/me replaces the profile; `phone: null` clears it. */
+export interface UpdateProfileRequest {
+  fullName: string;
+  phone: string | null;
+}
+
 export interface RegisteredUser {
   id: string;
   email: string;
