@@ -90,11 +90,8 @@ const ADMIN_NAV: NavEntry[] = [
   { id: 'logs', label: 'Logs', link: '/admin/logs' },
 ];
 
-/** User space: home and profile for the moment. Logout lives on the right side. */
-const USER_NAV: NavEntry[] = [
-  { id: 'home', label: 'Home', link: '/home' },
-  { id: 'profile', label: 'Profile', link: '/profile' },
-];
+/** User space: home only; the account chip links to the profile page. */
+const USER_NAV: NavEntry[] = [{ id: 'home', label: 'Home', link: '/home' }];
 
 /**
  * Authenticated user-space navigation, ported from `mega-nav-menu.txt`.
@@ -103,7 +100,7 @@ const USER_NAV: NavEntry[] = [
  * Angular version keeps the rounded floating bar, the mega dropdown with an
  * image preview and the mobile panel, using only Angular router + plain CSS.
  * Menu entries are role-aware: admins get the dashboard / reports / logs
- * workspace, everyone else gets home / profile.
+ * workspace, everyone else gets home, with profile behind the account chip.
  */
 @Component({
   selector: 'app-mega-nav',
@@ -158,10 +155,15 @@ const USER_NAV: NavEntry[] = [
 
             <div class="actions">
               @if (currentUser()) {
-                <div class="who">
+                <a
+                  class="who"
+                  routerLink="/profile"
+                  (click)="closeAll()"
+                  aria-label="Profile settings"
+                >
                   <span class="avatar" aria-hidden="true">{{ initials() }}</span>
                   <span class="who-name">{{ displayName() }}</span>
-                </div>
+                </a>
               }
               <button type="button" class="logout" (click)="onLogout()" [disabled]="loggingOut()">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
@@ -287,10 +289,15 @@ const USER_NAV: NavEntry[] = [
 
               <div class="m-account">
                 @if (currentUser()) {
-                  <div class="m-who">
+                  <a
+                    class="m-who"
+                    routerLink="/profile"
+                    (click)="closeAll()"
+                    aria-label="Profile settings"
+                  >
                     <span class="avatar" aria-hidden="true">{{ initials() }}</span>
                     <span class="who-name">{{ displayName() }}</span>
-                  </div>
+                  </a>
                 }
                 <button type="button" class="logout full" (click)="onLogout()" [disabled]="loggingOut()">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">

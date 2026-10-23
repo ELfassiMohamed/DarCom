@@ -112,6 +112,11 @@
   align-items: center;
   gap: 8px;
   min-width: 0;
+  text-decoration: none;
+}
+
+.who:hover .who-name {
+  color: #18181b;
 }
 
 .avatar {
@@ -144,7 +149,7 @@
   align-items: center;
   justify-content: center;
   gap: 6px;
-  border: 1px solid #f5c6cb;
+  border: 1px solid #e4e4e7;
   border-radius: 999px;
   background: #fff;
   padding: 8px 14px;
@@ -156,12 +161,14 @@
   cursor: pointer;
   transition:
     background 0.2s,
-    border-color 0.2s;
+    border-color 0.2s,
+    color 0.2s;
 }
 
 .logout:hover:not(:disabled) {
-  border-color: #efb6bd;
-  background: #fdecea;
+  border-color: #b00020;
+  background: #b00020;
+  color: #fff;
 }
 
 .logout:disabled {
@@ -390,6 +397,7 @@
   align-items: center;
   gap: 8px;
   padding: 0 4px;
+  text-decoration: none;
 }
 
 .logout.full {
