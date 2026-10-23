@@ -6,6 +6,7 @@ import {
   afterNextRender,
   computed,
   inject,
+  input,
   signal,
   viewChildren,
 } from '@angular/core';
@@ -71,26 +72,28 @@ const generateSquares = (): Square[] => shuffle(orderedSquares());
           DarCom connects visitors looking for a place to stay with hosts who have space to share.
           Browse listings, message hosts, and request bookings in one place.
         </p>
-        @if (loggedIn()) {
-          <a
-            routerLink="/home"
-            class="inline-block bg-brand text-white font-medium py-2 px-4 rounded transition-all hover:bg-brand-dark active:scale-95"
-          >
-            Go to your dashboard
-          </a>
-        } @else {
-          <a
-            routerLink="/register"
-            class="inline-block bg-brand text-white font-medium py-2 px-4 rounded transition-all hover:bg-brand-dark active:scale-95"
-          >
-            Get started
-          </a>
-          <a
-            routerLink="/login"
-            class="inline-block ml-2 text-brand font-medium py-2 px-4 rounded transition-all hover:bg-brand/10"
-          >
-            Log in
-          </a>
+        @if (showCta()) {
+          @if (loggedIn()) {
+            <a
+              [routerLink]="dashboardLink()"
+              class="inline-block bg-brand text-white font-medium py-2 px-4 rounded transition-all hover:bg-brand-dark active:scale-95"
+            >
+              Go to your dashboard
+            </a>
+          } @else {
+            <a
+              routerLink="/register"
+              class="inline-block bg-brand text-white font-medium py-2 px-4 rounded transition-all hover:bg-brand-dark active:scale-95"
+            >
+              Get started
+            </a>
+            <a
+              routerLink="/login"
+              class="inline-block ml-2 text-brand font-medium py-2 px-4 rounded transition-all hover:bg-brand/10"
+            >
+              Log in
+            </a>
+          }
         }
       </div>
       <div class="grid grid-cols-4 grid-rows-4 h-[450px] gap-1" aria-hidden="true">
@@ -118,8 +121,14 @@ export class LandingComponent {
   private readonly injector = inject(Injector);
   private readonly destroyRef = inject(DestroyRef);
 
+  /** The authenticated `/home` reuses this hero but hides the dashboard self-link. */
+  readonly showCta = input(true);
+
   readonly squares = signal<Square[]>(orderedSquares());
   readonly loggedIn = computed(() => this.auth.currentUser() !== null);
+  readonly dashboardLink = computed(() =>
+    this.auth.currentUser()?.role === 'ADMIN' ? '/admin/users' : '/home',
+  );
 
   private readonly tiles = viewChildren<ElementRef<HTMLElement>>('tile');
   private timeoutRef: ReturnType<typeof setTimeout> | undefined;
