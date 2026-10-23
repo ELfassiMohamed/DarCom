@@ -3,7 +3,6 @@
    no Last-Login / Two-Step columns, the API does not provide them. */
 
 .admin-page {
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   min-height: calc(100vh - 84px);
   width: 100%;
   padding: 32px 20px;
