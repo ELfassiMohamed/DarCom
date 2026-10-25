@@ -27,6 +27,7 @@ public class AppConfig {
     private final String appPublicUrl;
     private final long verificationTokenTtlHours;
     private final long passwordResetTokenTtlMinutes;
+    private final String uploadDir;
 
     public AppConfig() {
         Dotenv dotenv = Dotenv.configure().ignoreIfMissing().load();
@@ -65,6 +66,7 @@ public class AppConfig {
                 firstNonBlank(System.getenv("PASSWORD_RESET_TOKEN_TTL_MINUTES"),
                         dotenv.get("PASSWORD_RESET_TOKEN_TTL_MINUTES")),
                 60);
+        this.uploadDir = orDefault(firstNonBlank(System.getenv("UPLOAD_DIR"), dotenv.get("UPLOAD_DIR")), "uploads/photos");
     }
 
     public String getJwtSecret() {
@@ -117,6 +119,10 @@ public class AppConfig {
 
     public long getPasswordResetTokenTtlMinutes() {
         return passwordResetTokenTtlMinutes;
+    }
+
+    public String getUploadDir() {
+        return uploadDir;
     }
 
     private static String firstNonBlank(String a, String b) {

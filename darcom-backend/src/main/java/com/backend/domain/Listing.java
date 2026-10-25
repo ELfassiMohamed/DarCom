@@ -3,7 +3,7 @@ package com.backend.domain;
 import jakarta.persistence.*;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
-import jakarta.validation.constraints.PositiveOrZero;
+import jakarta.validation.constraints.Positive;
 import com.backend.domain.enums.ListingStatus;
 
 import java.math.BigDecimal;
@@ -43,7 +43,7 @@ public class Listing {
     private String address;
 
     @NotNull
-    @PositiveOrZero
+    @Positive
     @Column(name = "price_per_night", nullable = false, precision = 10, scale = 2)
     private BigDecimal pricePerNight;
 
