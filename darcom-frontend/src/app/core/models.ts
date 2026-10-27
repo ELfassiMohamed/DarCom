@@ -89,13 +89,99 @@ export type AdminSortField = 'createdAt' | 'email' | 'fullName' | 'role';
 
 export type SortDir = 'asc' | 'desc';
 
-export interface AdminUserQuery {
+export interface ListingPhoto {
+  id: string;
+  url: string;
+  sortOrder: number;
+}
+
+export interface ListingHost {
+  id: string;
+  fullName: string;
+}
+
+export interface Listing {
+  id: string;
+  host: ListingHost;
+  title: string;
+  description: string;
+  city: string;
+  address: string;
+  pricePerNight: number;
+  currency: string;
+  mealsIncluded: boolean;
+  activities: string[];
+  status: 'ACTIVE' | 'HIDDEN' | 'REMOVED';
+  photos: ListingPhoto[];
+  createdAt: string;
+  updatedAt: string | null;
+}
+
+export interface ListingQuery {
+  city?: string;
+  minPrice?: number;
+  maxPrice?: number;
+  mealsIncluded?: boolean;
+  page?: number;
+  size?: number;
+  sort?: string;
+}
+
+export interface ListingPageResponse {
+  items: Listing[];
+  page: number;
+  size: number;
+  totalItems: number;
+  totalPages: number;
+}
+
+export interface ListingDetails {
+  id: string;
+  host: ListingHost;
+  title: string;
+  description: string;
+  city: string;
+  address: string;
+  pricePerNight: number;
+  currency: string;
+  mealsIncluded: boolean;
+  activities: string[];
+  status: 'ACTIVE' | 'HIDDEN' | 'REMOVED';
+  photos: ListingPhoto[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateListingRequest {
+  title: string;
+  description: string;
+  city: string;
+  address: string;
+  pricePerNight: number;
+  currency: string;
+  mealsIncluded: boolean;
+  activities: string[];
+}
+
+export interface UpdateListingRequest {
+  title: string;
+  description: string;
+  city: string;
+  address: string;
+  pricePerNight: number;
+  currency: string;
+  mealsIncluded: boolean;
+  activities: string[];
+  status?: 'ACTIVE' | 'HIDDEN' | 'REMOVED';
+}
+
+export interface AdminListingQuery {
+  role?: Role;
+  verified?: boolean;
+  blocked?: boolean;
+  search?: string;
   page: number;
   size: number;
   sortField: AdminSortField;
   sortDir: SortDir;
-  search?: string;
-  role?: Role;
-  verified?: boolean;
-  blocked?: boolean;
 }

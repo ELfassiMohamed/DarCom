@@ -21,6 +21,29 @@ export interface MockUser {
   reportCount: number;
 }
 
+export interface MockListing {
+  id: string;
+  host: MockUser;
+  title: string;
+  description: string;
+  city: string;
+  address: string;
+  pricePerNight: number;
+  currency: string;
+  mealsIncluded: boolean;
+  activities: string[];
+  status: 'ACTIVE' | 'HIDDEN' | 'REMOVED';
+  photos: MockListingPhoto[];
+  createdAt: string;
+  updatedAt: string | null;
+}
+
+export interface MockListingPhoto {
+  id: string;
+  url: string;
+  sortOrder: number;
+}
+
 export interface MockUserDetail extends User {
   listingCount: number;
   reportCount: number;
@@ -202,6 +225,7 @@ function seedUsers(): MockUser[] {
 
 export class MockDatabase {
   users: MockUser[] = [];
+  listings: MockListing[] = [];
   readonly refreshTokens = new Map<string, RefreshRecord>();
   readonly verificationTokens = new Map<string, TokenRecord>();
   readonly resetTokens = new Map<string, TokenRecord>();
@@ -212,6 +236,7 @@ export class MockDatabase {
 
   reset(): void {
     this.users = seedUsers();
+    this.listings = [];
     this.refreshTokens.clear();
     this.verificationTokens.clear();
     this.resetTokens.clear();
@@ -329,6 +354,66 @@ export class MockDatabase {
       ...this.toUserDto(user),
       listingCount: user.listingCount,
       reportCount: user.reportCount,
+    };
+  }
+
+  addListing(listing: MockListing): void {
+    this.listings.push(listing);
+  }
+
+  findListingById(id: string): MockListing | undefined {
+    return this.listings.find((l) => l.id === id);
+  }
+
+  updateListing(id: string, patch: Partial<MockListing>): MockListing | undefined {
+    const listing = this.findListingById(id);
+    if (!listing) {
+      return undefined;
+    }
+    Object.assign(listing, patch);
+    return listing;
+  }
+
+  toListingDto(listing: MockListing): ListingDetails {
+    return {
+      id: listing.id,
+      host: {
+        id: listing.host.id,
+        fullName: listing.host.fullName,
+      },
+      title: listing.title,
+      description: listing.description,
+      city: listing.city,
+      address: listing.address,
+      pricePerNight: listing.pricePerNight,
+      currency: listing.currency,
+      mealsIncluded: listing.mealsIncluded,
+      activities: listing.activities,
+      status: listing.status,
+      photos: listing.photos.map((p) => ({
+        id: p.id,
+        url: p.url,
+        sortOrder: p.sortOrder,
+      })),
+      createdAt: listing.createdAt,
+      updatedAt: listing.updatedAt,
+    };
+  }
+
+  toListingSummary(listing: MockListing): Listing {
+    return {
+      id: listing.id,
+      host: {
+        id: listing.host.id,
+        fullName: listing.host.fullName,
+      },
+      title: listing.title,
+      description: listing.description,
+      city: listing.city,
+      pricePerNight: listing.pricePerNight,
+      currency: listing.currency,
+      mainPhotoUrl: listing.photos?.[0]?.url || null,
+      hostName: null,
     };
   }
 
