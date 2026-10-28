@@ -1,0 +1,118 @@
+name: CI + Auto PR
+
+on:
+  push:
+    branches-ignore: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+# New push to the same branch cancels the older run (saves free minutes)
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 1. Leaked secrets (API keys, tokens) in the code or history
+      - name: Secret scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # 2. Env check: .env not committed, every env var used in code is in .env.example
+      - name: Env check
+        run: bash .github/scripts/check-env.sh
+
+      # 3. Security / bug patterns (Semgrep OSS CLI, free, runs locally in the runner)
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Semgrep scan
+        run: |
+          pip install semgrep
+          semgrep scan --config p/default --metrics=off --error --exclude node_modules --exclude dist
+
+      # ---------- Node / JS / TS projects ----------
+      - uses: actions/setup-node@v4
+        if: hashFiles('package.json') != ''
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install (Node)
+        if: hashFiles('package-lock.json') != ''
+        run: npm ci
+
+      - name: Lint
+        if: hashFiles('package.json') != ''
+        run: npm run lint --if-present
+
+      - name: Type check
+        if: hashFiles('package.json') != ''
+        run: npm run typecheck --if-present
+
+      - name: Tests
+        if: hashFiles('package.json') != ''
+        run: npm test --if-present
+
+      - name: Build
+        if: hashFiles('package.json') != ''
+        run: npm run build --if-present
+
+      - name: Dependency audit (warn only)
+        if: hashFiles('package-lock.json') != ''
+        continue-on-error: true
+        run: npm audit --audit-level=high
+
+      # ---------- Python projects ----------
+      - uses: actions/setup-python@v5
+        if: hashFiles('requirements.txt') != ''
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install (Python)
+        if: hashFiles('requirements.txt') != ''
+        run: pip install -r requirements.txt ruff pytest
+
+      - name: Lint (ruff)
+        if: hashFiles('requirements.txt') != ''
+        run: ruff check .
+
+      - name: Tests (pytest)
+        if: hashFiles('requirements.txt') != ''
+        run: pytest -q || [ $? -eq 5 ]   # exit code 5 = no tests found, don't fail
+
+  # Runs only if every check above passed
+  open-pr:
+    needs: checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Open PR to main if none exists
+        env:
+          # PRs opened with the default GITHUB_TOKEN don't trigger other workflows.
+          # Optional: add a fine-grained PAT as secret PR_TOKEN (pull requests: write) to fix that.
+          GH_TOKEN: ${{ secrets.PR_TOKEN || secrets.GITHUB_TOKEN }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          existing=$(gh pr list --head "$BRANCH" --base main --state open --json number -q '.[0].number')
+          if [ -n "$existing" ]; then
+            echo "PR #$existing already exists, it updates automatically with this push."
+          else
+            gh pr create --base main --head "$BRANCH" --fill \
+              --body "Auto-opened after all checks passed on \`$BRANCH\`."
+          fi
