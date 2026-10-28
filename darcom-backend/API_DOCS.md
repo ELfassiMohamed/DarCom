@@ -350,7 +350,7 @@ Errors: `401`, `403 FORBIDDEN`, `404 USER_NOT_FOUND`, `409 NOT_BLOCKED`.
 
 ### `GET /health` (public) → `200`
 
-No DB call, no auth.
+Check the service runnup, No DB call, no auth.
 
 ```json
 { "status": "UP" }
