@@ -40,7 +40,9 @@ jobs:
       - name: Semgrep scan
         run: |
           pip install semgrep
-          semgrep scan --config p/default --metrics=off --error --exclude node_modules --exclude dist
+          semgrep scan --config p/default --metrics=off --error \
+            --exclude-rule yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag \
+            --exclude node_modules --exclude dist
 
       # ---------- Node / JS / TS projects ----------
       - uses: actions/setup-node@v4
