@@ -33,7 +33,7 @@ jobs:
         run: bash .github/scripts/check-env.sh
 
       # 3. Security / bug patterns (Semgrep OSS CLI, free, runs locally in the runner)
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -75,7 +75,7 @@ jobs:
         run: npm audit --audit-level=high
 
       # ---------- Python projects ----------
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         if: hashFiles('requirements.txt') != ''
         with:
           python-version: "3.12"
