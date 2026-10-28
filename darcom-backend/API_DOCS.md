@@ -558,7 +558,7 @@ Errors: `403 NOT_OWNER`, `404 LISTING_NOT_FOUND`.
 
 ### `GET /health` (public) → `200`
 
-No DB call, no auth.
+Service status, No DB call, no auth.
 
 ```json
 { "status": "UP" }
