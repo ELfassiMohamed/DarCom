@@ -346,7 +346,215 @@ Errors: `401`, `403 FORBIDDEN`, `404 USER_NOT_FOUND`, `409 NOT_BLOCKED`.
 
 ---
 
-## 4. Health
+## 4. Listings
+
+### `POST /listings` (Bearer, role `HOST`) → `201`
+
+Creates a new listing. The host must have a verified email.
+
+Request:
+
+```json
+{
+  "title": "Cozy riad near the medina",
+  "description": "Two-bedroom riad, 10 min walk to the stadium.",
+  "city": "Tetouan",
+  "address": "12 Rue de la Kasbah",
+  "pricePerNight": 450.00,
+  "currency": "MAD",
+  "mealsIncluded": true,
+  "activities": ["Airport pickup", "Guided medina tour"]
+}
+```
+
+Success `201`:
+
+```json
+{
+  "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "host": {
+    "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+    "fullName": "Youssef El Amrani"
+  },
+  "title": "Cozy riad near the medina",
+  "description": "Two-bedroom riad, 10 min walk to the stadium.",
+  "city": "Tetouan",
+  "address": "12 Rue de la Kasbah",
+  "pricePerNight": 450.00,
+  "currency": "MAD",
+  "mealsIncluded": true,
+  "activities": ["Airport pickup", "Guided medina tour"],
+  "status": "ACTIVE",
+  "photos": [],
+  "createdAt": "2026-10-12T13:00:00Z",
+  "updatedAt": null
+}
+```
+
+Errors: `400 VALIDATION_ERROR`, `403 EMAIL_NOT_VERIFIED`, `401 UNAUTHENTICATED`.
+
+---
+
+### `GET /listings` (public) → `200`
+
+Public listing search with optional filters.
+
+Query params:
+- `city` - filter by city name (partial match)
+- `minPrice` - minimum price per night
+- `maxPrice` - maximum price per night
+- `mealsIncluded` - `true` or `false`
+- `page` (default: `0`)
+- `size` (default: `20`)
+- `sort` (default: `createdAt,desc`)
+
+Success `200`:
+
+```json
+{
+  "items": [
+    {
+      "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+      "title": "Cozy riad near the medina",
+      "city": "Tetouan",
+      "pricePerNight": 450.00,
+      "currency": "MAD",
+      "mainPhotoUrl": "photo123.jpg",
+      "hostName": null
+    }
+  ],
+  "page": 0,
+  "size": 20,
+  "totalItems": 1,
+  "totalPages": 1
+}
+```
+
+---
+
+### `GET /listings/mine` (Bearer, role `HOST`) → `200`
+
+Lists all listings belonging to the authenticated host, regardless of status.
+
+Success `200`:
+
+```json
+{
+  "items": [
+    {
+      "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+      "title": "Cozy riad near the medina",
+      "city": "Tetouan",
+      "pricePerNight": 450.00,
+      "currency": "MAD",
+      "mainPhotoUrl": "photo123.jpg",
+      "hostName": null
+    }
+  ],
+  "page": 0,
+  "size": 20,
+  "totalItems": 1,
+  "totalPages": 1
+}
+```
+
+---
+
+### `GET /listings/{id}` (public) → `200`
+
+Returns full listing details including photos and host summary.
+
+Success `200`:
+
+```json
+{
+  "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "host": {
+    "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+    "fullName": "Youssef El Amrani"
+  },
+  "title": "Cozy riad near the medina",
+  "description": "Two-bedroom riad, 10 min walk to the stadium.",
+  "city": "Tetouan",
+  "address": "12 Rue de the Kasbah",
+  "pricePerNight": 450.00,
+  "currency": "MAD",
+  "mealsIncluded": true,
+  "activities": ["Airport pickup", "Guided medina tour"],
+  "status": "ACTIVE",
+  "photos": [
+    {
+      "id": "photo-uuid-1",
+      "url": "photo123.jpg",
+      "sortOrder": 0
+    }
+  ],
+  "createdAt": "2026-10-12T13:00:00Z",
+  "updatedAt": "2026-10-12T13:00:00Z"
+}
+```
+
+Errors: `404 LISTING_NOT_FOUND`.
+
+---
+
+### `PUT /listings/{id}` (Bearer, role `HOST`, owner) → `200`
+
+Updates a listing. Full replace - all fields must be provided.
+
+Request: (same as `POST /listings`)
+
+Success `200`: (same as `GET /listings/{id}`)
+
+Errors: `400 VALIDATION_ERROR`, `403 NOT_OWNER`, `404 LISTING_NOT_FOUND`.
+
+---
+
+### `DELETE /listings/{id}` (Bearer, role `HOST`, owner) → `204`
+
+Soft deletes a listing by setting status to `REMOVED`.
+
+Success: `204` with empty body.
+
+Errors: `403 NOT_OWNER`, `404 LISTING_NOT_FOUND`, `409 CANNOT_DELETE_WITH_ACTIVE_BOOKINGS`.
+
+---
+
+### `POST /listings/{id}/photos` (Bearer, role `HOST`, owner) → `201`
+
+Uploads a photo for a listing.
+
+**Content-Type:** `multipart/form-data` with field name `file`
+
+**File requirements:**
+- Allowed types: JPEG, PNG, WEBP
+- Max size: 5MB
+
+Success `201`:
+
+```json
+{
+  "id": "photo-uuid-1",
+  "url": "new-photo-uuid.jpg",
+  "sortOrder": 1
+}
+```
+
+Errors: `400 INVALID_FILE_TYPE`, `403 NOT_OWNER`, `404 LISTING_NOT_FOUND`.
+
+---
+
+### `DELETE /listings/{id}/photos/{photoId}` (Bearer, role `HOST`, owner) → `204`
+
+Deletes a photo from a listing.
+
+Success: `204` with empty body.
+
+Errors: `403 NOT_OWNER`, `404 LISTING_NOT_FOUND`.
+
+---
+
+## 5. Health
 
 ### `GET /health` (public) → `200`
 
@@ -358,7 +566,7 @@ No DB call, no auth.
 
 ---
 
-## 5. Error codes reference
+## 6. Error codes reference
 
 | HTTP | Code | Meaning |
 |---|---|---|
@@ -372,6 +580,12 @@ No DB call, no auth.
 | 403 | `ACCOUNT_BLOCKED` | Blocked account (login, or Bearer use) |
 | 404 | `NOT_FOUND` | Unknown path |
 | 404 | `USER_NOT_FOUND` | Unknown user id |
+| 409 | `CANNOT_DELETE_WITH_ACTIVE_BOOKINGS` | Cannot delete listing with pending/confirmed bookings |
+| 404 | `LISTING_NOT_FOUND` | Listing not found or already removed |
+| 403 | `NOT_OWNER` | User is not the owner of the resource |
+| 403 | `EMAIL_NOT_VERIFIED` | User email is not verified (required for listing creation) |
+| 400 | `INVALID_FILE_TYPE` | Photo file type not allowed (only JPEG, PNG, WEBP) |
+| 413 | `FILE_TOO_LARGE` | Photo file exceeds 5MB limit |
 | 405 | `METHOD_NOT_ALLOWED` | Wrong HTTP method |
 | 409 | `EMAIL_ALREADY_EXISTS` | Register with a taken email |
 | 409 | `ALREADY_BLOCKED` / `NOT_BLOCKED` | Redundant block/unblock |

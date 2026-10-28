@@ -3,17 +3,15 @@ import { DotMapComponent } from './dot-map.component';
 
 /**
  * Auth shell ported from `Connect Signin.txt` (21st.dev "Travel Connect"):
- * full-screen gradient background, split card with the animated dot map on the
- * left and the projected form content on the right.
+ * white page surface, split card with the animated dot map on the left and the
+ * projected form content on the right.
  */
 @Component({
   selector: 'app-auth-card',
   standalone: true,
   imports: [DotMapComponent],
   template: `
-    <div
-      class="min-h-screen w-full flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 p-4"
-    >
+    <div class="min-h-screen w-full flex items-center justify-center bg-white p-4">
       <div
         class="auth-card w-full max-w-4xl md:min-h-[600px] overflow-hidden rounded-2xl flex bg-white shadow-xl"
       >

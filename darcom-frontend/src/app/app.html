@@ -1,1 +1,7 @@
 <router-outlet />
+
+@if (useMocks) {
+  <div class="mock-badge" role="status" title="Responses are served by MSW, not the Jakarta EE backend">
+    MOCK API
+  </div>
+}

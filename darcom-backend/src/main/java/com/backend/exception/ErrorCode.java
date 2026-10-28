@@ -26,4 +26,10 @@ public final class ErrorCode {
     public static final String INVALID_OR_EXPIRED_VERIFICATION_TOKEN = "INVALID_OR_EXPIRED_VERIFICATION_TOKEN";
     public static final String INVALID_OR_EXPIRED_RESET_TOKEN = "INVALID_OR_EXPIRED_RESET_TOKEN";
     public static final String TOO_MANY_REQUESTS = "TOO_MANY_REQUESTS";
+    public static final String LISTING_NOT_FOUND = "LISTING_NOT_FOUND";
+    public static final String NOT_OWNER = "NOT_OWNER";
+    public static final String EMAIL_NOT_VERIFIED = "EMAIL_NOT_VERIFIED";
+    public static final String CANNOT_DELETE_WITH_ACTIVE_BOOKINGS = "CANNOT_DELETE_WITH_ACTIVE_BOOKINGS";
+    public static final String INVALID_FILE_TYPE = "INVALID_FILE_TYPE";
+    public static final String FILE_TOO_LARGE = "FILE_TOO_LARGE";
 }
